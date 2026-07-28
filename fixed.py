@@ -44,7 +44,7 @@ import wandb
 # config of hyperparameters and constants
 DATA_PATH     = "data/adult.tsv"
 WANDB_ENTITY  = "lshearer2957-self"
-WANDB_PROJECT = "adaptive_alpha_adult_gender"
+WANDB_PROJECT = "final_results"
 EPOCHS        = 30
 BATCH_SIZE    = 256
 LR            = 1e-3
@@ -170,7 +170,7 @@ for alpha in ALPHA_VALUES:
         wandb.init(
             entity=WANDB_ENTITY,
             project=WANDB_PROJECT,
-            name=f"fixedalpha{alpha:g}_adult_gender_{SEED}",
+            name=f"fixed_alpha{alpha:g}_adult_gender_seed{SEED}",
             config={
                 "epochs": EPOCHS,
                 "batch_size": BATCH_SIZE,
