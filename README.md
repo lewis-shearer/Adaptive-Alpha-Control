@@ -1,192 +1,201 @@
 # Adaptive Alpha Control
 
-**Adaptive Alpha Control: A Trend-Aware Dynamic Weighting Mechanism for Stable Adversarial Debiasing**
+**A self-adjusting alternative to fixed-weight adversarial debiasing.**
 
-An extension of the adversarial debiasing framework proposed by Zhang et al. (2018) that replaces a fixed adversarial weight (`α`) with a dynamic controller driven by fairness and accuracy trends during training.
+Adversarial debiasing is a way to train a model that's less biased. It works by pitting two models against each other: one tries to make a prediction, the other tries to guess a sensitive attribute (like gender) from that prediction. How much the first model listens to the second is controlled by a single number, usually written as `α` (alpha).
 
-The system continuously adjusts adversarial pressure using changes in:
-
-* Accuracy (ACC)
-* Difference in Equal Opportunity (DEO)
-* Difference in Average Odds (DAO)
-
-The objective is to improve fairness while maintaining predictive performance, avoiding the instability and manual tuning associated with fixed adversarial weights.
+Normally, `α` is picked once, by hand, before training starts. Pick it too low and the model stays biased; too high and accuracy suffers. This project replaces that manual guess with a controller that watches accuracy and fairness during training and adjusts `α` automatically, every epoch.
 
 ---
 
-# Overview
+## How it works
 
-Traditional adversarial debiasing trains a predictor and an adversary simultaneously.
+Two models train together:
 
-The predictor attempts to predict income from census features, while the adversary attempts to recover a sensitive attribute (gender) from the predictor's output probability alone (not from the raw features). This forces the predictor to produce outputs that don't leak gender information if it wants to fool the adversary.
+- **The predictor** — predicts whether someone's income is above $50k, from census data.
+- **The adversary** — tries to guess someone's gender, but only from the predictor's output (not the raw data).
 
-The predictor loss is:
+If the adversary can guess gender accurately, that's a sign the predictor's output is leaking gender information. So the predictor is trained to do two things at once: predict income correctly, and give the adversary as little to work with as possible.
 
-```
-L_pred = BCE(y, ŷ) − α · BCE(z, ẑ)
-```
-
-where:
-
-* y = target label (income > $50K)
-* ŷ = predicted label
-* z = sensitive attribute (gender)
-* ẑ = adversary's prediction of z from ŷ
-* α = adversarial weighting coefficient
-
-Training alternates each batch: the adversary is updated to get *better* at recovering gender from `ŷ`, then the predictor is updated to minimise its own prediction loss while *maximising* the adversary's loss (via the `−α · BCE(z, ẑ)` term) — i.e. trying to blind the adversary.
-
-In Zhang et al.'s original framework, `α` is a constant chosen up front. This repository implements and compares three variants of this setup, sharing the same architecture, data pipeline, and metrics:
+`α` controls how much weight the second goal gets. This repo compares three ways of setting it, all using the same model and data, so the comparison is fair:
 
 | Script | What it does |
 | --- | --- |
-| [`baseline.py`](baseline.py) | Predictor only, no adversary, no debiasing. Establishes the accuracy/fairness of the model with no intervention. |
-| [`fixed.py`](fixed.py) | Adversarial debiasing with a **constant** α, swept across 8 values, each run for multiple seeds — traces out an accuracy-vs-fairness tradeoff curve to compare against. |
-| [`dynamic.py`](dynamic.py) | Adaptive Alpha Control — α is recomputed every epoch from the trend in ACC/DEO/DAO. |
+| [`baseline.py`](baseline.py) | No adversary at all — just the predictor. A reference point with no fairness effort. |
+| [`fixed.py`](fixed.py) | Adversarial debiasing with a fixed `α`, tried across 8 different values (multiple runs each) to map out the trade-off between fairness and accuracy. |
+| [`dynamic.py`](dynamic.py) | **Adaptive Alpha Control** — `α` is recalculated every epoch based on how accuracy and fairness are trending. |
 
 ---
 
-# Why a fixed-alpha *sweep* instead of one fixed value
+## Why test 8 fixed values instead of just one
 
-Comparing an adaptive controller against a single, arbitrarily-chosen fixed α is a weak baseline — if that one value happens to be badly tuned, the adaptive method "wins" for the wrong reason.
+Comparing the adaptive controller against a single fixed `α` isn't a fair test — if that one value happens to be a bad choice, the adaptive method looks better for the wrong reason.
 
-`fixed.py` instead trains the fixed-alpha model across a range of `ALPHA_VALUES = [0.05, 0.1, 0.2, 0.3, 0.4708, 0.7, 1.0, 1.5]` (roughly an order of magnitude either side of the dynamic controller's initial α), each for multiple seeds. This produces a Pareto frontier of ACC vs DEO/DAO. The dynamic controller's result is then judged against that whole curve, not one point on it — if it sits on or beyond the frontier, that's a materially stronger claim than beating a single hand-picked number.
-
-Because this sweep is 8× the training cost of a single run, `fixed.py` uses fewer seeds per alpha (`SEEDS_PER_ALPHA`) than the 30 used in `dynamic.py`; that constant can be raised if compute allows.
+So `fixed.py` runs the model at 8 different fixed alphas (`0.05, 0.1, 0.2, 0.3, 0.4708, 0.7, 1.0, 1.5`), each with several random seeds. Plotting all of them together gives a curve of the best possible trade-offs between accuracy and fairness — a Pareto frontier. The adaptive controller is then judged against that whole curve, not one lucky (or unlucky) point on it.
 
 ---
 
-# Model Architecture
+## Model setup
 
-Identical predictor and adversary are used across all three scripts, so comparisons aren't confounded by architecture differences.
+Same predictor and adversary architecture in all three scripts:
 
-## Predictor
+**Predictor:** 99 input features → 64 neurons → 32 neurons → 1 output (income prediction)
 
-Input (99 features)
+**Adversary:** predictor's single output number → 32 neurons → 1 output (gender guess)
 
-→ Dense(64, ReLU)
-
-→ Dense(32, ReLU)
-
-→ Dense(1, Sigmoid)
-
-## Adversary
-
-Input: predictor output ŷ (a single probability, not the raw features)
-
-→ Dense(32, ReLU)
-
-→ Dense(1, Sigmoid)
-
-Because the adversary only ever sees `ŷ`, it can only recover gender if the predictor's output itself carries a signal correlated with gender — it has no access to the raw features to find that correlation elsewhere.
+The adversary never sees the original data — only the predictor's answer — so it can only guess gender correctly if that answer is carrying a gender signal.
 
 ---
 
-# Adaptive Alpha Controller (`dynamic.py`)
+## The adaptive controller, in short (`dynamic.py`)
 
-After every epoch:
+At the end of each epoch, the controller:
 
-1. Evaluate ACC, DEO, and DAO on the held-out test set.
-2. Compute the change in each metric since the previous epoch (`Δ`).
-3. Smooth each `Δ` with an exponential moving average (EMA) — this stops the controller from over-reacting to noisy epoch-to-epoch swings.
-4. Combine the smoothed deltas into a single pressure signal.
-5. Update α for the next epoch from that pressure.
+1. Measures accuracy, DEO, and DAO (fairness metrics, explained below) on test data.
+2. Checks how much each one moved since last epoch.
+3. Smooths those changes over time, so one noisy epoch doesn't cause an overreaction.
+4. Combines them into a single "pressure" score.
+5. Uses that score to nudge `α` up or down for the next epoch.
 
-Pressure signal:
+If bias is trending up, pressure rises and `α` goes up — leaning harder on the adversary. If accuracy is improving, pressure is pulled back down, so accuracy isn't sacrificed for a fairness gain that was already happening on its own.
 
-```
-pressure = (W_DEO × EMA(ΔDEO)) + (W_DAO × EMA(ΔDAO)) − (W_ACC × EMA(ΔACC))
-```
-
-Intuition: if bias (DEO/DAO) is trending upward, pressure goes positive and α increases next epoch, weighting the adversary term more heavily. If accuracy is improving, that pulls pressure back down, damping the adversarial push so accuracy isn't sacrificed for a fairness gain that's already happening on its own.
-
-Alpha update:
-
-```
-α ← clip(α + α_lr × pressure, α_min, α_max)
-```
-
-**Accuracy floor override:** if accuracy on the current epoch drops below `ACC_FLOOR` (0.84), the controller ignores the computed pressure and forces `pressure = min(pressure, -0.2)` — i.e. it unconditionally pushes α down to relieve pressure on the predictor and recover accuracy, regardless of what the fairness trend says.
+**Safety net:** if accuracy ever drops below 0.84, the controller ignores everything else and pushes `α` back down, to protect accuracy first.
 
 ---
 
-# Fairness Metrics
+## Fairness metrics, briefly
 
-All three scripts compute these identically, from the test-set predictions at a 0.5 threshold.
+All three scripts measure the same things on held-out test data:
 
-## Accuracy (ACC)
-
-Overall prediction accuracy. Higher is better.
-
-## Difference in Equal Opportunity (DEO)
-
-Disparity in true positive rate between gender groups:
-
-```
-DEO = |TPR₀ − TPR₁|
-```
-
-Lower is better.
-
-## Difference in Average Odds (DAO)
-
-Average of the TPR and FPR disparities between gender groups:
-
-```
-DAO = (|TPR₀ − TPR₁| + |FPR₀ − FPR₁|) / 2
-```
-
-Lower is better.
+- **ACC (Accuracy)** — how often the income prediction is correct. Higher is better.
+- **DEO (Difference in Equal Opportunity)** — among people who actually earn over $50k, is the model equally good at spotting them across genders? Lower is better.
+- **DAO (Difference in Average Odds)** — a broader version of DEO that also accounts for false positives. Lower is better.
 
 ---
 
-# Dataset
+## Results
+
+Charts below are averaged over 30 training runs each (shaded band = spread across runs), from Weights & Biases:
+
+- 🟢 green = `Zhang2018_AdaptiveAlpha_EMA` — the adaptive controller (this project's method)
+- 🔴 red = `Baseline_NoDebiasing` — no fairness effort
+- 🔵 blue = the fixed-alpha sweep average
+
+### Accuracy over training
+
+![Accuracy over training](results/acc_over_epochs.png)
+
+Accuracy stays close across all three. The adaptive controller (green) tracks just under the baseline (red), while the fixed-alpha average (blue) sits a bit lower and more spread out — because it includes some alpha values that are too aggressive for accuracy.
+
+### Equal Opportunity gap over training — lower is better
+
+![DEO over training](results/deo_over_epochs.png)
+
+The adaptive controller (green) drops fastest and stays lowest almost the whole way through training, well below both the baseline and the fixed-alpha average.
+
+### Average Odds gap over training — lower is better
+
+![DAO over training](results/dao_over_epochs.png)
+
+Same story here — green settles lowest and stays there.
+
+### Accuracy vs. fairness trade-off (Pareto frontier)
+
+![Pareto frontier](pareto_frontier.png)
+
+This plots every fixed-alpha run against the adaptive controller (red star) on the same axes, so the full trade-off curve is visible at once, not just one point on it. The dynamic controller lands right on the frontier, next to the `α = 0.3`–`0.4708` cluster — not off to the side or dominated by it.
+
+### Final numbers (mean ± std over 30 runs each)
+
+All three scripts now use the same, bug-fixed preprocessing code, and the fixed-alpha sweep covers all 8 planned values — so this table reflects a like-for-like comparison.
+
+| Model | ACC ↑ | DEO ↓ | DAO ↓ |
+| --- | --- | --- | --- |
+| Baseline (no debiasing) | 0.8453 ± 0.0014 | 0.0816 ± 0.0223 | 0.0807 ± 0.0138 |
+| Fixed Alpha (α = 0.05) | 0.8458 ± 0.0015 | 0.0697 ± 0.0239 | 0.0732 ± 0.0141 |
+| Fixed Alpha (α = 0.1) | 0.8456 ± 0.0019 | 0.0600 ± 0.0284 | 0.0682 ± 0.0168 |
+| Fixed Alpha (α = 0.2) | 0.8449 ± 0.0013 | 0.0513 ± 0.0248 | 0.0623 ± 0.0145 |
+| Fixed Alpha (α = 0.3) | 0.8448 ± 0.0015 | 0.0260 ± 0.0226 | 0.0476 ± 0.0132 |
+| Fixed Alpha (α = 0.4708) | 0.8444 ± 0.0016 | 0.0201 ± 0.0140 | 0.0401 ± 0.0086 |
+| Fixed Alpha (α = 0.7) | 0.8433 ± 0.0022 | 0.0445 ± 0.0222 | 0.0466 ± 0.0095 |
+| Fixed Alpha (α = 1.0) | 0.8416 ± 0.0019 | 0.0859 ± 0.0208 | 0.0605 ± 0.0090 |
+| Fixed Alpha (α = 1.5) | 0.8388 ± 0.0021 | 0.1349 ± 0.0266 | 0.0769 ± 0.0112 |
+| **Dynamic Alpha (adaptive, ours)** | 0.8446 ± 0.0014 | 0.0236 ± 0.0183 | 0.0449 ± 0.0112 |
+
+**Honest read of this table:** the adaptive controller beats the baseline and most fixed alphas comfortably on both fairness metrics, while barely giving up any accuracy. The closest fixed point, `α = 0.4708` (its own starting value), edges it out slightly on DEO/DAO alone — but it also has *lower* accuracy than the dynamic controller, so neither point beats the other outright: they sit on the same trade-off frontier, not one dominating the other. The real value of the adaptive approach is landing on that frontier automatically, without having to sweep 8 values and pick the best one in advance.
+
+Source data for this table: [`results/wandb_final_results.csv`](results/wandb_final_results.csv).
+
+### Is the adaptive controller also more stable, not just fairer?
+
+Yes, on the fairness metrics. Rather than eyeballing the chart bands, this was checked directly by pulling the full per-epoch history (all 30 epochs × all 300 runs, not just the final-epoch summary) from the W&B API — see [`fetch_run_histories.py`](fetch_run_histories.py) and [`results/wandb_full_history.csv`](results/wandb_full_history.csv). Two things were measured, both averaged over epochs 10–30 (after the initial ramp-up settles):
+
+- **Cross-seed spread at a given epoch** — how much the 30 seeds disagree with each other at any point in training (this is what the shaded chart bands show):
+
+  | Model | ACC std | DEO std | DAO std |
+  | --- | --- | --- | --- |
+  | Baseline | 0.0015 | 0.0238 | 0.0140 |
+  | Fixed Alpha (avg of all 8) | 0.0027 | 0.0423 | 0.0182 |
+  | **Dynamic Alpha (adaptive)** | 0.0015 | **0.0180** | **0.0105** |
+
+- **Epoch-to-epoch jitter within a single run** — the average size of the swing from one epoch to the next, per run:
+
+  | Model | ACC Δ | DEO Δ | DAO Δ |
+  | --- | --- | --- | --- |
+  | Baseline | 0.00140 | 0.02418 | 0.01458 |
+  | Fixed Alpha (avg of all 8) | 0.00149 | 0.02290 | 0.01181 |
+  | **Dynamic Alpha (adaptive)** | 0.00135 | **0.01872** | **0.01102** |
+
+So the adaptive controller is genuinely more stable on fairness — both in how much seeds disagree with each other, and in how much a single run wobbles epoch to epoch — not just an impression from the chart. On accuracy, the three are close enough (0.0015 vs 0.0015 vs 0.0027 std; 0.00135–0.00149 jitter) that there's no meaningful stability difference either way.
+
+---
+
+## Dataset
 
 **UCI Adult Income Dataset** (`data/adult.tsv`)
 
-Task: predict whether annual income exceeds $50,000.
+- **Task:** predict whether someone's annual income is above $50,000.
+- **Sensitive attribute:** gender (binary in this dataset — see [Ethical Considerations](#ethical-considerations)).
 
-Sensitive attribute: gender (binary in this dataset — see Ethical Considerations).
+Preprocessing, shared across all three scripts:
 
-Preprocessing (shared across all three scripts):
+- Drop rows with missing values
+- Strip whitespace from text columns
+- One-hot encode categorical columns (workclass, education, marital status, occupation, relationship, race, native country)
+- Standardise numeric columns
+- 80/20 train/test split, stratified by income, `random_state=42`
+- ~45k records, 99 features per row after encoding
 
-* Drop rows with missing values
-* Strip whitespace from string columns
-* One-hot encode categorical columns (workclass, education, marital-status, occupation, relationship, race, native-country)
-* Standardise numeric columns
-* 80/20 train/test split, stratified on income, `random_state=42`
-* ~45k records, 99 predictor features after encoding
-
-`data/German.tsv` (German Credit dataset) is also present but not currently used by any script — it's there for possible future extension to a second dataset/sensitive-attribute setting, not part of the current experiments.
+`data/German.tsv` (German Credit dataset) is also present but not used by any script yet — kept for a possible future second dataset.
 
 ---
 
-# Hyperparameters (`dynamic.py`)
+## Hyperparameters (`dynamic.py`)
 
-Found through hyperparameter tuning with W&B sweeps.
+Found via a Weights & Biases hyperparameter sweep.
 
-| Parameter           | Value        |
-| ------------------- | ------------ |
-| Epochs              | 30           |
-| Batch Size          | 256          |
-| Learning Rate       | 1e-3         |
-| Alpha Initial       | 0.4708055928 |
-| Alpha Minimum       | 0.01         |
-| Alpha Maximum       | 1.0048358312 |
+| Parameter | Value |
+| --- | --- |
+| Epochs | 30 |
+| Batch Size | 256 |
+| Learning Rate | 1e-3 |
+| Alpha Initial | 0.4708055928 |
+| Alpha Minimum | 0.01 |
+| Alpha Maximum | 1.0048358312 |
 | Alpha Learning Rate | 0.4468379573 |
-| Accuracy Floor      | 0.84         |
-| EMA Smoothing       | 0.3601034154 |
-| W_DEO               | 0.6689005575 |
-| W_DAO               | 1.9288807993 |
-| W_ACC               | 4.6453214453 |
+| Accuracy Floor | 0.84 |
+| EMA Smoothing | 0.3601034154 |
+| W_DEO | 0.6689005575 |
+| W_DAO | 1.9288807993 |
+| W_ACC | 4.6453214453 |
 
-`fixed.py` reuses the same epochs/batch-size/LR, but sweeps α itself rather than using a controller (see `ALPHA_VALUES` above). `baseline.py` reuses the same epochs/batch-size/LR with no α and no adversary at all.
+`fixed.py` reuses the same epochs/batch-size/learning rate, but sweeps `α` itself instead of using a controller. `baseline.py` reuses the same settings with no `α` and no adversary at all.
 
 ---
 
-# Experimental Setup
+## Experimental setup
 
-All three scripts now share identical data loading, preprocessing, `build_predictor`, `compute_metrics`, the same 30-seed sweep (seeds 0–29), the same batch/epoch loop structure, and the same W&B project — so the only thing that varies between them is how (or whether) α and the adversary are used. This makes the three-way comparison a valid ablation rather than three independently-configured experiments.
+All three scripts share the same data loading, preprocessing, model-building code, metric calculations, the same 30 seeds (0–29), and log to the same W&B project — so the only thing that differs is how (or whether) `α` and the adversary are used.
 
 | Script | Seeds | W&B project | W&B group |
 | --- | --- | --- | --- |
@@ -194,32 +203,14 @@ All three scripts now share identical data loading, preprocessing, `build_predic
 | `fixed.py` | 30 per alpha × 8 alphas | `final_results` | `FixedAlpha_<alpha>` |
 | `dynamic.py` | 30 (seeds 0–29) | `final_results` | `DynamicAlpha` |
 
-Two things previously broke that comparability and have since been fixed:
+Two bugs used to break this comparison and have since been fixed:
 
-* **Preprocessing bug**: `baseline.py` and `dynamic.py` used `df.select_dtypes(include="str")` to find categorical columns for whitespace-stripping. Pandas string columns are dtype `object`, not `str`, so that call silently matched nothing and the stripping never ran — while `fixed.py` already used the correct `include="object"`. All three scripts now use `include="object"`, so they train on identically-encoded features.
-* **`baseline.py` scope**: it previously trained a single seed (123) into a separate W&B project (`FINAL`). It's now rewritten to loop over the same 30 seeds, log to the same project, and use the same `tf.GradientTape` training-step structure as the other two scripts (predictor-only, no adversary).
-
----
-
-# Results
-
-Mean ± std over 30 seeds per row, from W&B.
-
-**These numbers predate the fixes above** — the `Base Model` row came from an older, differently-coded baseline script (single/legacy seed loop, buggy preprocessing), and `Dynamic Alpha` was run before the `include="object"` fix, so its feature encoding didn't match `fixed.py`'s. They're kept here as the last known values; all three scripts need to be rerun on the now-coherent code before this table is trustworthy for the paper.
-
-| Model | ACC ↑ | DEO ↓ | DAO ↓ |
-| --- | --- | --- | --- |
-| Base Model | 0.8219 ± 0.0089 | 0.0720 ± 0.0211 | 0.0833 ± 0.0150 |
-| Fixed Alpha (α = 0.05) | 0.8455 ± 0.0017 | 0.0746 ± 0.0272 | 0.0768 ± 0.0162 |
-| Fixed Alpha (α = 0.1) | 0.8452 ± 0.0017 | 0.0684 ± 0.0218 | 0.0735 ± 0.0123 |
-| Fixed Alpha (α = 0.2) | 0.8447 ± 0.0018 | 0.0446 ± 0.0271 | 0.0588 ± 0.0161 |
-| Dynamic Alpha | 0.8450 ± 0.0019 | 0.0298 ± 0.0195 | 0.0483 ± 0.0115 |
-
-The remaining `fixed.py` sweep values (0.3, 0.4708, 0.7, 1.0, 1.5) haven't been run yet either. Once everything is rerun, `fixed_alpha_sweep_results.csv` will hold per-(alpha, seed) metrics for the full tradeoff curve, and this table should be replaced with the fresh numbers.
+- **Preprocessing bug:** `baseline.py` and `dynamic.py` were filtering for text columns using the wrong pandas dtype, so whitespace-stripping silently never ran. `fixed.py` already had it right. All three now use the same, correct filter — the [Results](#results) table above reflects this fix.
+- **`baseline.py` scope:** it used to train a single seed into a separate, older W&B project. It's now rewritten to run the same 30 seeds, log to the same project, and use the same training loop structure as the other two scripts.
 
 ---
 
-# Installation
+## Installation
 
 Clone the repository:
 
@@ -234,26 +225,26 @@ Install dependencies:
 pip install tensorflow numpy pandas scikit-learn wandb
 ```
 
-Requirements:
+You'll need:
 
-* Python 3.10+
-* TensorFlow
-* NumPy
-* Pandas
-* Scikit-learn
-* Weights & Biases (`wandb login` before running any script)
+- Python 3.10+
+- TensorFlow
+- NumPy
+- Pandas
+- Scikit-learn
+- A Weights & Biases account (`wandb login` before running anything)
 
 ---
 
-# Running Experiments
+## Running experiments
 
-Ensure the Adult dataset is located at:
+Make sure the dataset is here:
 
 ```text
 data/adult.tsv
 ```
 
-Run whichever variant you want directly:
+Then run whichever version you want:
 
 ```bash
 python baseline.py   # no debiasing, 30 seeds
@@ -261,15 +252,15 @@ python fixed.py       # 8-value alpha sweep, 30 seeds each
 python dynamic.py     # adaptive alpha controller, 30 seeds
 ```
 
-`fixed.py` additionally writes a local summary to `fixed_alpha_sweep_results.csv` (per-alpha, per-seed final ACC/DEO/DAO) so the tradeoff curve can be rebuilt without depending on W&B access.
+`fixed.py` also saves a local summary to `fixed_alpha_sweep_results.csv`, so the trade-off curve can be rebuilt without needing W&B access.
 
 ---
 
-# Running the Fixed-Alpha Sweep Across Multiple Machines
+## Running the fixed-alpha sweep across multiple machines
 
-`fixed.py` runs its whole `ALPHA_VALUES × SEEDS` grid sequentially in one process. [`fixed_sweep.py`](fixed_sweep.py) + [`sweep_fixed.yaml`](sweep_fixed.yaml) run the same grid through an actual **W&B Sweep**, so the work can be split across several machines (e.g. a MacBook plus Windows laptops) instead of one machine grinding through all of it.
+`fixed.py` runs its whole grid of alphas and seeds one at a time, on one machine. To split the work across several machines instead (say, a MacBook plus a couple of Windows laptops), use [`fixed_sweep.py`](fixed_sweep.py) with [`sweep_fixed.yaml`](sweep_fixed.yaml) — this runs the same grid as a proper **W&B Sweep**.
 
-How it works: `wandb agent` on each machine repeatedly asks the sweep controller for the next unclaimed `(alpha, seed)` pair, runs it, and asks for another — so all machines drain the same shared grid in parallel with no manual work-splitting and no chance of two machines training the same combination.
+Each machine asks W&B for the next unclaimed (alpha, seed) pair, runs it, and asks for another — so all machines chip away at the same grid at once, with no manual splitting and no risk of duplicate work.
 
 ```bash
 # once, on any one machine — creates the sweep and prints a SWEEP_ID
@@ -279,21 +270,17 @@ wandb sweep sweep_fixed.yaml
 wandb agent <entity>/<project>/<SWEEP_ID>
 ```
 
-`sweep_fixed.yaml`'s grid only covers the alpha values not already produced by `fixed.py`'s manual runs (0.05, 0.1, 0.2). Edit the `alpha.values` list there if you want the full 8-value grid re-run through the sweep instead, for consistency.
-
-Each sweep-assigned run still calls `build_predictor`/`build_adversary`/`compute_metrics` and logs `ACC`/`DEO`/`DAO`/`alpha`/`pred_loss`/`adv_loss` exactly like `fixed.py`, and is renamed to the same `fixed_alpha<alpha>_adult_gender_seed<seed>` convention — so results from the manual runs and the sweep runs are interchangeable in the same `final_results` project. There's no shared local CSV across machines though (`fixed.py`'s in-process `sweep_results` list doesn't exist here) — pull final numbers back afterward via a W&B export or the `wandb.Api()`.
+Every run from the sweep logs the same metrics and follows the same naming convention as a manual `fixed.py` run, so results from both are interchangeable in the same `final_results` project. There's no shared local CSV across machines though — pull final numbers back afterward via a W&B export or `wandb.Api()`.
 
 ---
 
-# Weights & Biases Logging
+## Weights & Biases logging
 
-`dynamic.py` logs, per epoch: `ACC`, `DEO`, `DAO`, `alpha`, `pressure`, `ema_ddeo`, `ema_ddao`, `ema_dacc`, `pred_loss`, `adv_loss`.
+- `dynamic.py` logs, per epoch: `ACC`, `DEO`, `DAO`, `alpha`, `pressure`, `ema_ddeo`, `ema_ddao`, `ema_dacc`, `pred_loss`, `adv_loss`.
+- `fixed.py` logs, per epoch: `ACC`, `DEO`, `DAO`, `alpha`, `pred_loss`, `adv_loss`.
+- `baseline.py` logs, per epoch: `ACC`, `DEO`, `DAO`, `pred_loss`.
 
-`fixed.py` logs, per epoch: `ACC`, `DEO`, `DAO`, `alpha`, `pred_loss`, `adv_loss`.
-
-`baseline.py` logs, per epoch: `ACC`, `DEO`, `DAO`, `pred_loss`.
-
-Run naming conventions:
+Run naming:
 
 ```text
 baseline_adult_gender_seed<seed>            # baseline.py
@@ -303,7 +290,7 @@ dynamic_adult_gender_seed<seed>             # dynamic.py
 
 ---
 
-# Repository Structure
+## Repository structure
 
 ```text
 Adaptive-Alpha-Control/
@@ -312,39 +299,41 @@ Adaptive-Alpha-Control/
 │   ├── adult.tsv        # used by all three scripts
 │   └── German.tsv       # present, not currently used
 │
-├── baseline.py           # no debiasing
-├── fixed.py               # fixed-alpha sweep (single-machine, manual loop)
-├── fixed_sweep.py         # fixed-alpha sweep (W&B-Sweep-driven, one (alpha, seed) per run)
+├── results/                    # charts and exported data shown in this README
+│   ├── acc_over_epochs.png
+│   ├── deo_over_epochs.png
+│   ├── dao_over_epochs.png
+│   └── wandb_final_results.csv
+│
+├── baseline.py            # no debiasing
+├── fixed.py               # fixed-alpha sweep (single machine)
+├── fixed_sweep.py         # fixed-alpha sweep (W&B Sweep, multi-machine)
 ├── sweep_fixed.yaml       # grid config for fixed_sweep.py
 ├── dynamic.py             # adaptive alpha controller
+├── analyze_results.py     # builds the Pareto frontier plot
+├── pareto_frontier.png    # accuracy vs. fairness trade-off chart
 │
 └── README.md
 ```
 
 ---
 
-# Ethical Considerations
+## Ethical considerations
 
-Adaptive Alpha Control improves measured fairness metrics but does not guarantee fairness in an absolute sense.
+Adaptive Alpha Control improves the fairness metrics it's measured on — it doesn't guarantee fairness in a broader sense. Some important limits:
 
-Important limitations include:
+- Gender is treated as binary here, because that's how the UCI Adult dataset records it
+- The model learns from historical census data, which carries its own historical biases
+- DEO and DAO are specific definitions of fairness — they don't capture every notion of what "fair" means
+- Other features correlated with gender could still let bias leak through indirectly
+- The fairness-accuracy trade-off is shaped by controller settings (`W_DEO`, `W_DAO`, `W_ACC`), which were themselves chosen via a hyperparameter sweep, not first principles
 
-* Binary treatment of gender, inherited from how the UCI Adult dataset encodes this attribute
-* Dependence on historical census data
-* Metric-specific fairness definitions (DEO/DAO don't capture every notion of fairness)
-* Potential proxy discrimination through correlated features
-* Fairness–accuracy trade-offs encoded through controller weights (`W_DEO`, `W_DAO`, `W_ACC`), which were themselves tuned via a hyperparameter sweep
-
-The system should be viewed as a tool for bias mitigation rather than a complete fairness solution.
+This project is a tool for reducing bias, not a complete solution to fairness.
 
 ---
 
-# Acknowledgements
+## Acknowledgements
 
-This project builds upon:
+This project builds on:
 
-Zhang, B. H., Lemoine, B., & Mitchell, M. (2018).
-
-*Mitigating Unwanted Biases with Adversarial Learning.*
-
-Proceedings of the AAAI/ACM Conference on AI, Ethics, and Society.
+Zhang, B. H., Lemoine, B., & Mitchell, M. (2018). *Mitigating Unwanted Biases with Adversarial Learning.* Proceedings of the AAAI/ACM Conference on AI, Ethics, and Society.
