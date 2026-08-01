@@ -1,0 +1,17 @@
+program: german/baseline_sweep.py
+method: grid
+name: german_baseline_sweep
+entity: lshearer2957-self
+project: final_results_german
+command:
+  - ${env}
+  - python3
+  - ${program}
+  - ${args}
+metric:
+  name: DAO
+  goal: minimize
+parameters:
+  # 30 seeds, split across whichever machines run `wandb agent` against this sweep.
+  seed:
+    values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
