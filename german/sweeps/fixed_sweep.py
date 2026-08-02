@@ -8,14 +8,14 @@ and seed injected by a W&B sweep controller rather than chosen by the script
 itself -- so the work can be split across multiple machines.
 
 Usage:
-    wandb sweep german/sweep_fixed.yaml
+    wandb sweep german/sweeps/sweep_fixed.yaml
         -> creates the sweep on W&B, prints a SWEEP_ID (entity/project/id)
 
     wandb agent <SWEEP_ID>
         -> run this on every machine you want contributing runs. Each agent
            repeatedly asks W&B for the next unclaimed (alpha, seed) pair from
            the grid in sweep_fixed.yaml, runs it via
-           `python german/fixed_sweep.py`, then asks for another.
+           `python german/sweeps/fixed_sweep.py`, then asks for another.
 
 You can run this sweep's agent(s) at the same time as baseline_sweep.py's and
 dynamic_sweep.py's agents (different sweeps, same or different machines) --
@@ -26,7 +26,7 @@ sweep_fixed.yaml's grid covers the full 8-value ALPHA_VALUES x 30-seed grid
 (240 runs total).
 
 Preprocessing, build_predictor, build_adversary, and compute_metrics are
-kept identical to fixed.py / dynamic.py / baseline.py in this folder so
+kept identical to fixed.py / dynamic.py / baseline.py in the parent german/ folder so
 results stay comparable regardless of which script (or which machine)
 produced them.
 """
@@ -130,7 +130,7 @@ def compute_metrics(y_true, y_pred_prob, z_true, threshold=0.5):
 
 
 ##### ONE SWEEP-ASSIGNED RUN #####
-# `wandb agent` invokes this script as `python3 german/fixed_sweep.py
+# `wandb agent` invokes this script as `python3 german/sweeps/fixed_sweep.py
 # --alpha=... --seed=...`, so alpha/seed are available from argv before
 # wandb.init() ever runs -- needed because `group` can only be set at
 # init() time.

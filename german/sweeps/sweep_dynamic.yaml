@@ -1,6 +1,6 @@
-program: german/baseline_sweep.py
+program: german/sweeps/dynamic_sweep.py
 method: grid
-name: german_baseline_sweep
+name: german_dynamic_sweep
 entity: lshearer2957-self
 project: final_results_german
 command:

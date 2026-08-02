@@ -8,13 +8,13 @@ controller rather than chosen by the script itself -- so the 30 seeds can be
 split across multiple machines running `wandb agent` at the same time.
 
 Usage:
-    wandb sweep german/sweep_dynamic.yaml
+    wandb sweep german/sweeps/sweep_dynamic.yaml
         -> creates the sweep on W&B, prints a SWEEP_ID (entity/project/id)
 
     wandb agent <SWEEP_ID>
         -> run this on every machine you want contributing runs. Each agent
            repeatedly asks W&B for the next unclaimed seed from
-           sweep_dynamic.yaml, runs it via `python german/dynamic_sweep.py`,
+           sweep_dynamic.yaml, runs it via `python german/sweeps/dynamic_sweep.py`,
            then asks for another.
 
 You can run this sweep's agent(s) at the same time as baseline_sweep.py's
@@ -27,7 +27,7 @@ constants, not swept -- see the note in dynamic.py about why these Adult-
 tuned values are deliberately left unchanged here.
 
 Preprocessing, build_predictor, build_adversary, and compute_metrics are
-kept identical to baseline.py / fixed.py / dynamic.py in this folder so
+kept identical to baseline.py / fixed.py / dynamic.py in the parent german/ folder so
 results stay comparable regardless of which script (or which machine)
 produced them.
 """
@@ -47,18 +47,21 @@ EPOCHS     = 30
 BATCH_SIZE = 256
 LR         = 1e-3
 
-# constants found through hyperparam tuning with wandb sweeps (on Adult -- see dynamic.py)
-ALPHA_INIT = 0.4708055927870487
+# constants found through a controller hyperparameter search scoped to
+# German Credit (see dynamic_hparam_sweep.py / sweep_dynamic_hparams.yaml) --
+# these replace the Adult-tuned values, since ACC_FLOOR=0.84 permanently
+# triggered the accuracy-floor override on this dataset (see the README).
+ALPHA_INIT = 0.9249509578176538
 ALPHA_MIN  = 0.01
-ALPHA_MAX  = 1.004835831178367
-ALPHA_LR   = 0.4468379572755423
+ALPHA_MAX  = 1.5  # the search's own bound (widened from Adult's 1.0048)
+ALPHA_LR   = 0.19829966035213417
 
-ACC_FLOOR  = 0.84
-W_DEO      = 0.668900557521594
-W_DAO      = 1.9288807992921904
-W_ACC      = 4.645321445267202
+ACC_FLOOR  = 0.6802150404512175
+W_DEO      = 4.0223452073919335
+W_DAO      = 3.683384110316499
+W_ACC      = 4.25009775450266
 
-EMA_ALPHA  = 0.3601034153775618
+EMA_ALPHA  = 0.8083720934476109
 
 # load and preprocess the dataset -- identical to baseline.py / fixed.py / dynamic.py
 cols = [
@@ -179,7 +182,7 @@ class MetricHistory:
 
 
 ##### ONE SWEEP-ASSIGNED RUN #####
-# `wandb agent` invokes this script as `python3 german/dynamic_sweep.py
+# `wandb agent` invokes this script as `python3 german/sweeps/dynamic_sweep.py
 # --seed=...`, so seed is available from argv before wandb.init() ever runs --
 # needed because `group` can only be set at init() time.
 parser = argparse.ArgumentParser()
