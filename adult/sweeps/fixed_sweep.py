@@ -7,15 +7,15 @@ and seed injected by a W&B sweep controller rather than chosen by the script
 itself -- so the work can be split across multiple machines.
 
 Usage:
-    wandb sweep sweep_fixed.yaml
+    wandb sweep adult/sweeps/sweep_fixed.yaml
         -> creates the sweep on W&B, prints a SWEEP_ID (entity/project/id)
 
     wandb agent <SWEEP_ID>
         -> run this on every machine you want contributing runs (e.g. your
            MacBook and a second laptop). Each agent repeatedly asks W&B
            for the next unclaimed (alpha, seed) pair from the grid in
-           sweep_fixed.yaml, runs it via `python fixed_sweep.py`, then asks
-           for another -- so the grid gets split across machines
+           sweep_fixed.yaml, runs it via `python adult/sweeps/fixed_sweep.py`,
+           then asks for another -- so the grid gets split across machines
            automatically, with no manual work-splitting and no risk of two
            machines training the same combination.
 

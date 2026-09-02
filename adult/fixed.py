@@ -240,8 +240,8 @@ for alpha in ALPHA_VALUES:
 # Save a local summary CSV of final-epoch metrics per (alpha, seed) for
 # building the tradeoff curve / Pareto plot without depending on W&B access.
 results_df = pd.DataFrame(sweep_results)
-results_df.to_csv("fixed_alpha_sweep_results.csv", index=False)
-print("\nSweep complete. Per-(alpha, seed) final metrics saved to fixed_alpha_sweep_results.csv")
+results_df.to_csv("adult/fixed_alpha_sweep_results.csv", index=False)
+print("\nSweep complete. Per-(alpha, seed) final metrics saved to adult/fixed_alpha_sweep_results.csv")
 print(results_df.groupby("alpha")[["ACC", "DEO", "DAO"]].agg(["mean", "std"]))
 
 print("\nAll runs complete. Results logged to W&B:",

@@ -1,5 +1,5 @@
 """Pulls full per-epoch history (not just final-epoch values) for every run
-in the `final_results` W&B project, and saves it to results/wandb_full_history.csv.
+in the `final_results` W&B project, and saves it to adult/results/wandb_full_history.csv.
 
 Used to compute real training-time stability metrics (cross-seed spread and
 epoch-to-epoch volatility) instead of eyeballing chart band widths.
@@ -12,7 +12,7 @@ import pandas as pd
 import wandb
 
 ENTITY_PROJECT = "lshearer2957-self/final_results"
-OUT_PATH = "results/wandb_full_history.csv"
+OUT_PATH = "adult/results/wandb_full_history.csv"
 
 
 def classify(name):

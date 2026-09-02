@@ -6,10 +6,10 @@ mean+/-std point across its 30 seeds, plot those points as a curve, and check
 whether the dynamic controller's point sits on/beyond that curve rather than
 cherry-picking a single "best" alpha or averaging across alphas.
 
-Run after the fixed-alpha sweep (fixed.py and/or fixed_sweep.py) and
+Run after the fixed-alpha sweep (fixed.py and/or sweeps/fixed_sweep.py) and
 dynamic.py have finished:
 
-    python analyze_results.py
+    python adult/analyze_results.py
 
 Requires `wandb login` to have been run already (uses the API, not wandb.log).
 """
@@ -137,5 +137,5 @@ for ax, metric in zip(axes, ("DEO", "DAO")):
     ax.grid(alpha=0.3)
 
 fig.tight_layout()
-fig.savefig("pareto_frontier.png", dpi=150)
-print("\nSaved plot to pareto_frontier.png")
+fig.savefig("adult/results/pareto_frontier.png", dpi=150)
+print("\nSaved plot to adult/results/pareto_frontier.png")
