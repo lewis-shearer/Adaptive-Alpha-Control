@@ -7,22 +7,27 @@
 \usepackage{amsmath}
 \usepackage{booktabs}
 \usepackage{graphicx}
-\usepackage{hyperref}
 \usepackage{caption}
 \usepackage{subcaption}
 \usepackage{xcolor}
 \usepackage{enumitem}
-\usepackage{natbib}
+\usepackage[numbers]{natbib}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
 
-\graphicspath{{../adult/results/}{../german/results/}}
+\graphicspath{{images/adult/}{images/german/}}
 
 \title{Adaptive Alpha Control: A Trend-Aware Dynamic Weighting \\
 Mechanism for Stable Adversarial Debiasing}
 
-\author{Lewis Shearer \\ \small{% affiliation placeholder -- fill in
-Independent Research}}
+\author{Lewis Shearer \\ \small{Independent Research}}
 
 \date{\today}
+
+\hypersetup{
+    pdftitle={Adaptive Alpha Control: A Trend-Aware Dynamic Weighting Mechanism for Stable Adversarial Debiasing},
+    pdfauthor={Lewis Shearer},
+    pdfsubject={Adversarial debiasing, fairness in machine learning},
+}
 
 \begin{document}
 
@@ -182,6 +187,7 @@ replaces with an automatic controller.
 
 % =======================================================================
 \section{Method: Adaptive Alpha Control}
+\label{sec:method}
 % =======================================================================
 
 \subsection{Overview}
@@ -314,7 +320,7 @@ weights in Equation~\ref{eq:pressure} -- were themselves found through a
 hyperparameter search (not hand-picked), summarised in
 Table~\ref{tab:hparams}.
 
-\begin{table}[h]
+\begin{table}[ht]
 \centering
 \caption{Adaptive controller hyperparameters, found via a Weights \&
 Biases search on the Adult Income dataset.}
@@ -373,14 +379,14 @@ random seeds (0--29):
     trained with no fairness objective whatsoever. This is a reference
     point showing how biased the model is with zero mitigation effort.
     \item \textbf{Fixed $\alpha$}: the adversarial game described in
-    Section~3, but with $\alpha$ held constant for the whole run. We
+    Section~\ref{sec:method}, but with $\alpha$ held constant for the whole run. We
     repeat this for eight different values of $\alpha$ (0.05, 0.1, 0.2,
     0.3, 0.4708, 0.7, 1.0, 1.5), each with all 30 seeds -- 240 runs in
     total. This traces out a full accuracy-versus-fairness trade-off
     curve (a \emph{Pareto frontier}), rather than relying on a single,
     possibly lucky or unlucky, choice of $\alpha$.
     \item \textbf{Dynamic $\alpha$ (ours)}: Adaptive Alpha Control, as
-    described in Section~3.
+    described in Section~\ref{sec:method}.
 \end{itemize}
 
 Comparing against a single fixed $\alpha$ would not be a fair test: if that
@@ -408,7 +414,7 @@ Table~\ref{tab:adult-results} shows the mean and standard deviation of each
 metric across 30 seeds, for the baseline, all eight fixed-$\alpha$
 settings, and the adaptive controller.
 
-\begin{table}[h]
+\begin{table}[ht]
 \centering
 \caption{Adult Income results, mean $\pm$ standard deviation over 30 seeds
 per condition. $\uparrow$ = higher is better, $\downarrow$ = lower is
@@ -442,7 +448,7 @@ curve. Figure~\ref{fig:pareto-adult} shows this trade-off directly: the
 dynamic controller (marked with a star) lands right on the frontier traced
 out by the fixed-$\alpha$ sweep, rather than being dominated by it.
 
-\begin{figure}[h]
+\begin{figure}[ht]
     \centering
     \includegraphics[width=0.8\textwidth]{pareto_frontier.png}
     \caption{Accuracy vs.\ fairness trade-off (Pareto frontier) on Adult
@@ -459,7 +465,7 @@ Figure~\ref{fig:epochs-adult} shows how the three conditions compare over
 the course of training, averaged across all 30 seeds (shaded bands show the
 spread across seeds).
 
-\begin{figure}[h]
+\begin{figure}[ht]
     \centering
     \begin{subfigure}[b]{0.32\textwidth}
         \includegraphics[width=\textwidth]{acc_over_epochs.png}
@@ -494,7 +500,7 @@ just the final-epoch summary.
 \textbf{Cross-seed spread} measures how much the 30 seeds disagree with
 each other at a given point in training (Table~\ref{tab:stability-spread}).
 
-\begin{table}[h]
+\begin{table}[ht]
 \centering
 \caption{Cross-seed standard deviation of each metric, epochs 10--30,
 Adult Income. Lower means more consistent outcomes across random seeds.}
@@ -513,7 +519,7 @@ Fixed $\alpha$ (average of 8)   & 0.0027 & 0.0423 & 0.0182 \\
 \textbf{Epoch-to-epoch jitter} measures how much a single run's metrics
 swing from one epoch to the next (Table~\ref{tab:stability-jitter}).
 
-\begin{table}[h]
+\begin{table}[ht]
 \centering
 \caption{Average size of the epoch-to-epoch change in each metric, epochs
 10--30, Adult Income. Lower means smoother, less erratic training.}
@@ -563,7 +569,7 @@ hyperparameter search's winning configuration is a claim, not a fact, and
 should be validated against more data than the search itself used before
 it is trusted.
 
-\begin{table}[h]
+\begin{table}[ht]
 \centering
 \caption{German Credit results (validated controller configuration), mean
 $\pm$ standard deviation over 30 seeds (240 runs for the fixed-$\alpha$
@@ -600,9 +606,9 @@ much smaller test set (roughly 200 rows) makes every metric noisier to
 begin with. Figure~\ref{fig:pareto-german} shows the corresponding
 trade-off plot.
 
-\begin{figure}[h]
+\begin{figure}[ht]
     \centering
-    \includegraphics[width=0.8\textwidth]{../german/results/pareto_frontier.png}
+    \includegraphics[width=0.8\textwidth]{images/german/pareto_frontier.png}
     \caption{Accuracy vs.\ fairness trade-off on German Credit, using the
     corrected controller configuration. The dynamic controller sits closer
     to the fixed-$\alpha$ frontier than the broken configuration did, but
@@ -726,7 +732,7 @@ and not to confounding factors such as unequal compute budgets.
 % =======================================================================
 \begin{thebibliography}{9}
 
-\bibitem{zhang2018}
+\bibitem[Zhang et~al.(2018)]{zhang2018}
 Zhang, B.~H., Lemoine, B., \& Mitchell, M. (2018).
 \textit{Mitigating Unwanted Biases with Adversarial Learning}.
 Proceedings of the AAAI/ACM Conference on AI, Ethics, and Society.
