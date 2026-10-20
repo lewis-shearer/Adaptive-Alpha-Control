@@ -1,0 +1,521 @@
+ADAPTIVE ALPHA CONTROL — PAPER NOTES
+======================================
+Working title idea: "Adaptive Alpha Control: A Trend-Aware Dynamic Weighting
+Mechanism for Stable Adversarial Debiasing"
+
+Positioning: this is an EXTENSION of Zhang, Lemoine & Mitchell (2018),
+"Mitigating Unwanted Biases with Adversarial Learning" (AAAI/ACM AIES).
+Same predictor/adversary game; the contribution is replacing their fixed,
+hand-picked alpha with a controller that adjusts alpha every epoch based on
+the trend of accuracy and fairness metrics.
+
+
+1. ONE-LINE PITCH
+------------------
+Zhang et al. (2018) make you pick a single fixed alpha (how much the
+predictor listens to the adversary) by hand, once, before training — pick
+wrong and you either stay biased or wreck accuracy. Adaptive Alpha Control
+replaces that guess with a lightweight feedback controller that watches
+accuracy/DEO/DAO every epoch and nudges alpha up or down automatically,
+landing on (or near) the same accuracy-fairness Pareto frontier you'd only
+reach by sweeping many fixed alphas by hand.
+
+
+2. WHAT'S COPIED FROM ZHANG 2018 VS WHAT'S NEW
+-----------------------------------------------
+Copied (faithful reproduction):
+  - The adversarial debiasing game itself: predictor P tries to predict the
+    label; adversary A tries to recover the sensitive attribute from ONLY
+    P's output (not the raw features). P is trained to minimize its own
+    loss while maximizing A's loss, scaled by alpha.
+  - Loss formulation: L_P = BCE(y, y_hat) - alpha * BCE(z, z_hat)
+                       L_A = BCE(z, z_hat)
+    (see adult/dynamic.py:297, adult/fixed.py:211 — identical form)
+
+New (this project's contribution):
+  - Alpha is no longer a constant. It's recalculated every epoch by a
+    controller (adult/dynamic.py, class MetricHistory) that:
+      1. Tracks accuracy, DEO, DAO after every epoch.
+      2. Computes the epoch-over-epoch delta of each.
+      3. Smooths each delta with an EMA (so one noisy epoch doesn't cause
+         an overreaction).
+      4. Combines the three smoothed deltas into a single scalar "pressure"
+         signal via fixed weights (W_DEO, W_DAO, W_ACC).
+      5. Moves alpha in the direction of that pressure, clipped to
+         [ALPHA_MIN, ALPHA_MAX].
+  - A hard safety override: if accuracy drops below ACC_FLOOR, ignore
+    fairness pressure entirely and force alpha down (protect accuracy
+    first, unconditionally).
+  - A rigorous baseline for comparison: not one fixed alpha, but an 8-point
+    fixed-alpha SWEEP, so the adaptive method is judged against a whole
+    Pareto curve, not one (possibly lucky/unlucky) fixed choice.
+  - Validation on a SECOND dataset (German Credit) to check the result
+    isn't an artifact of Adult Income specifically — including catching
+    and fixing a subtle failure mode when naively porting hyperparameters
+    across datasets (see section 8, "Limitations", and the README's
+    "Second dataset" section for the full post-mortem — this is a good
+    "lessons learned" subsection for the paper, it's a genuinely honest
+    and interesting failure/recovery story).
+
+
+3. MAIN POINTS TO TALK ABOUT (paper talking points / narrative beats)
+----------------------------------------------------------------------
+  - The core problem with fixed alpha: it's a single knob controlling a
+    moving target. The right alpha at epoch 1 (undertrained predictor,
+    adversary has nothing to grab onto yet) is not the right alpha at
+    epoch 30 (predictor has converged, bias may have crept back in). A
+    static value can't be optimal throughout training.
+  - Why a PID-like / trend-aware controller instead of just "increase alpha
+    over time on a schedule": the controller reacts to what's ACTUALLY
+    happening (is bias rising or falling right now, for this seed, this
+    run) rather than a pre-baked schedule that assumes every run behaves
+    the same way. This is the "adaptive" part — it's closed-loop, not
+    open-loop.
+  - Why EMA smoothing matters: raw epoch-to-epoch deltas in DEO/DAO are
+    noisy (small test sets, mini-batch stochasticity). Reacting to raw
+    noise causes alpha to oscillate. EMA gives a cheap, causal (no future
+    info needed) low-pass filter — standard control-theory trick applied
+    to a training loop.
+  - Why "pressure" is a single combined scalar, not three separate rules:
+    lets accuracy and fairness trends fight it out through one signed
+    number with tunable relative weights (W_DEO, W_DAO, W_ACC), rather
+    than needing brittle if/else logic for every combination of "fairness
+    worsening AND accuracy worsening" etc.
+  - Why the accuracy floor is a hard override, not just a large weight in
+    the pressure sum: a weighted sum can still let accuracy erode slowly
+    if fairness pressure is large and persistent. A hard clamp (`if acc <
+    floor: p = min(p, -0.2)`) guarantees a worst-case behavior regardless
+    of what the smoothed trends say — an explicit safety constraint, not
+    an emergent one. Worth framing this as a design choice with a
+    trade-off: it's what makes "accuracy is preserved" partly an
+    engineered guarantee rather than a pure emergent finding (be upfront
+    about this in the paper — the README already flags it honestly,
+    reuse that framing).
+  - Why compare against a FULL fixed-alpha sweep (8 values × 30 seeds)
+    instead of one fixed alpha: comparing adaptive-vs-one-fixed-value is
+    an unfair/meaningless test if that one value happens to be good or
+    bad. Sweeping and plotting the whole trade-off curve (Pareto frontier)
+    is the only way to make "the adaptive method is competitive with the
+    best manual tuning" a meaningful claim.
+  - Why 30 seeds, not 1 or 5: needed for the paper to make ANY statistical
+    claim (mean +/- std, paired significance tests). Most adversarial
+    debiasing papers in this space use 5-10 seeds — 30 is a point of
+    methodological strength worth stating explicitly.
+  - Why stability (not just mean fairness) matters: a method that's great
+    on average but wildly inconsistent seed-to-seed is not something a
+    practitioner can trust to deploy. This project explicitly measured
+    two different notions of stability (see section 7) using full
+    per-epoch history pulled from W&B, not just eyeballing chart bands.
+  - The honest, no-spin result: adaptive alpha does NOT strictly dominate
+    every fixed alpha — the fixed value equal to its own alpha_init
+    (0.4708) slightly beats it on DEO/DAO alone on Adult, but at a
+    genuine accuracy cost, so neither point dominates the other; they're
+    both roughly on the frontier. The actual claim is "gets you onto the
+    frontier automatically, without having to sweep 8 values and pick
+    after the fact" — not "beats everything." This nuance is exactly what
+    reviewers will probe — lead with it rather than let a reviewer find it.
+  - The German Credit re-tuning failure/recovery (section 8) is a strong
+    "limitations and lessons" section on its own — a hyperparameter search
+    that LOOKED validated (3-seed ranking, plausible numbers) but was
+    actually broken (accuracy floor firing on 84.6% of epochs, alpha
+    pinned at its minimum 70.7% of the time) until re-validated against
+    the full 30 seeds. This is a good case study for "validate your
+    hyperparameter search against more data than the search itself used."
+
+
+4. CODE BREAKDOWN — FILE BY FILE
+----------------------------------
+
+4.1 Shared preprocessing (identical logic in baseline.py / fixed.py /
+    dynamic.py, both adult/ and german/ variants):
+  - Load TSV, drop rows with any missing values (`?` treated as NaN).
+  - Strip whitespace from all string/object columns (this was a real bug
+    once — see README "Experimental setup" bugs section — worth a
+    footnote in the paper about reproducibility pitfalls in tabular
+    preprocessing).
+  - Label-encode target (income >50K vs <=50K) and sensitive attribute
+    (gender, treated as binary — an explicit limitation, see section 8).
+  - One-hot encode remaining categorical columns.
+  - StandardScaler on numeric features.
+  - 80/20 train/test split, stratified by label, random_state=42 (fixed
+    split across ALL seeds/conditions — important: this means seed only
+    affects model init + minibatch shuffling, not the data split itself;
+    state this precisely in the Method section, it affects how "paired by
+    seed" statistical tests should be interpreted).
+  - Result: ~45k rows, 99 features (Adult); 1,000 rows (German, much
+    smaller — this is why German is noisier, see section 8).
+
+4.2 Model architecture (identical across all three scripts/datasets):
+  - Predictor: Dense(64, relu) -> Dense(32, relu) -> Dense(1, sigmoid).
+    Input = 99 features (Adult) or dataset-equivalent for German. Output =
+    single probability (income / credit-risk prediction).
+  - Adversary: Dense(32, relu) -> Dense(1, sigmoid). Input = predictor's
+    SINGLE scalar output only (not the raw features, not the label). This
+    is the crux of the Zhang et al. design: the adversary can only guess
+    the sensitive attribute if that one number is leaking it.
+
+4.3 baseline.py (adult/baseline.py, german/baseline.py):
+  - No adversary in the loss at all. Just predictor trained on BCE(y,
+    y_hat). Still computes ACC/DEO/DAO on held-out data for comparison,
+    but nothing in training targets fairness.
+  - Purpose: reference point / "what does bias look like with zero
+    mitigation effort."
+  - 30 seeds, logs to W&B group "Baseline".
+
+4.4 fixed.py (adult/fixed.py, german/fixed.py):
+  - Same predictor/adversary game as dynamic.py, but alpha is a CONSTANT
+    for the whole run, chosen from ALPHA_VALUES = [0.05, 0.1, 0.2, 0.3,
+    0.4708055927870487, 0.7, 1.0, 1.5] (note: 0.4708... is deliberately
+    included because it's the dynamic controller's alpha_init — lets you
+    directly compare "adaptive starting from X" against "fixed at X the
+    whole time").
+  - Outer loop: for each alpha in ALPHA_VALUES, for each of 30 seeds ->
+    240 total runs for Adult (same count for German, in
+    german/results/... described as 30 seeds x 8 alphas).
+  - Also writes a local CSV (adult/fixed_alpha_sweep_results.csv or
+    german/fixed_alpha_sweep_results.csv) so the Pareto curve can be
+    rebuilt without W&B API access.
+  - adult/sweeps/fixed_sweep.py + sweep_fixed.yaml (and the german/sweeps/
+    equivalents): same grid, restructured as a genuine W&B Sweep so the
+    240-run grid can be split across multiple physical machines, each
+    agent claiming one (alpha, seed) pair at a time — worth a one-line
+    mention in the paper's reproducibility / compute section.
+
+4.5 dynamic.py (adult/dynamic.py, german/dynamic.py) — THE CORE METHOD:
+  Hyperparameters (Adult-tuned values; German has its own re-tuned set,
+  see section 8):
+    ALPHA_INIT = 0.4708055927870487   (starting alpha)
+    ALPHA_MIN  = 0.01                  (hard floor)
+    ALPHA_MAX  = 1.004835831178367     (hard ceiling)
+    ALPHA_LR   = 0.4468379572755423    (step size: how hard pressure
+                                         moves alpha per epoch)
+    ACC_FLOOR  = 0.84                  (safety-net accuracy threshold)
+    W_DEO      = 0.668900557521594     (weight on smoothed DEO trend)
+    W_DAO      = 1.9288807992921904    (weight on smoothed DAO trend)
+    W_ACC      = 4.645321445267202     (weight on smoothed ACC trend, more
+                                         heavily weighted than either
+                                         fairness term individually)
+    EMA_ALPHA  = 0.3601034153775618    (smoothing factor for the deltas)
+  All of these were found via a W&B Bayesian hyperparameter sweep, not
+  hand-picked — worth stating explicitly as "these are themselves a
+  hyperparameter search result, not first-principles constants" (this
+  matters for the Ethical Considerations / Limitations framing too).
+
+  Class MetricHistory (dynamic.py:170-212) — the controller's state:
+    .update(acc, deo, dao):
+        d_x = current_x - previous_x   for x in {acc, deo, dao}
+        ema_dx = EMA_ALPHA * d_x + (1 - EMA_ALPHA) * ema_dx   (exponential
+        moving average of the deltas, NOT of the raw metrics themselves —
+        important distinction: it's smoothing the RATE OF CHANGE)
+
+    .pressure(acc):
+        p = W_DEO * ema_ddeo + W_DAO * ema_ddao - W_ACC * ema_dacc
+        if acc < ACC_FLOOR:
+            p = min(p, -0.2)     # hard override, ignores everything above
+        return p
+
+      Sign convention (important to state clearly in the Method section):
+        - DEO/DAO rising (getting WORSE, since lower is better for both)
+          -> positive contribution to pressure -> alpha increases next
+          epoch -> lean harder on the adversary.
+        - Accuracy rising (getting BETTER) -> the "- W_ACC * ema_dacc"
+          term goes negative -> pulls pressure down -> alpha doesn't keep
+          climbing just because bias was trending down anyway; the
+          controller doesn't "double count" a fairness improvement that's
+          happening for free as accuracy improves.
+        - Accuracy below floor -> pressure forced to at most -0.2,
+          overriding whatever the fairness terms say -> alpha decreases
+          no matter what.
+
+  Alpha update (dynamic.py:312):
+        new_alpha = clip(alpha + ALPHA_LR * pressure, ALPHA_MIN, ALPHA_MAX)
+    This is a straightforward proportional controller: alpha moves in
+    the direction of pressure, scaled by a fixed learning rate, clamped to
+    a safe range. (If describing this in control-theory terms for the
+    paper: this is a P-controller on a derivative-of-metrics error signal,
+    with EMA smoothing acting as the filter stage — you could frame the
+    whole thing as "PD-like" since it's reacting to the trend/derivative
+    of the metrics rather than their absolute level.)
+
+  Training loop per epoch:
+    1. Shuffle training data.
+    2. For each minibatch: update adversary first (predictor frozen,
+       adversary trained to predict z from y_hat), then update predictor
+       (adversary frozen, predictor trained on BCE(y,y_hat) - alpha *
+       BCE(z,z_hat)).
+    3. After all minibatches, evaluate ACC/DEO/DAO on the held-out TEST
+       set (not train — important for the "is this leaking test info"
+       question flagged in the README's methodology caveats).
+    4. history.update(...) -> pressure(...) -> new_alpha -> log everything
+       to W&B (ACC, DEO, DAO, alpha, pressure, the three EMA deltas,
+       pred_loss, adv_loss) -> alpha = new_alpha for the next epoch.
+
+4.6 Fairness metrics (compute_metrics, dynamic.py:122-161 — identical in
+    baseline.py/fixed.py):
+    ACC = mean(y_pred == y_true)
+    DEO = |TPR_group0 - TPR_group1|          (equal opportunity gap,
+                                               true positives only)
+    DAO = (|TPR_group0 - TPR_group1| + |FPR_group0 - FPR_group1|) / 2
+                                              (average odds gap, adds
+                                               false-positive-rate parity)
+    Both computed only over rows where the relevant true-label mask is
+    non-empty for a group (falls back to 0.0 if a group has zero positive/
+    negative examples in the test split — worth a footnote, this is an
+    edge case that matters more for small datasets like German).
+
+4.7 adult/analyze_results.py, adult/fetch_run_histories.py:
+  - analyze_results.py: pulls all finished runs from the shared W&B
+    project via the API, aggregates fixed-alpha runs into one mean+/-std
+    point per alpha, runs an explicit Pareto-dominance check ("is dynamic
+    beaten on BOTH accuracy and the fairness metric by any single fixed
+    alpha?"), and plots the two-panel ACC-vs-DEO / ACC-vs-DAO frontier
+    figure used in the README and (presumably) the paper's main results
+    figure.
+  - fetch_run_histories.py: pulls FULL per-epoch history (not just final-
+    epoch summary) for every run, used to compute the two stability
+    metrics in section 7 below — this is what makes the stability claim
+    rigorous rather than a chart-reading impression.
+
+4.8 app/app.py — Streamlit results dashboard (not part of the training
+    pipeline, but potentially useful for generating paper figures/tables
+    interactively): loads a W&B export CSV, parses run names by
+    convention, and provides tabs for the Pareto tradeoff, cross-seed
+    stability, alpha-dynamics (final converged alpha distribution and its
+    correlation with outcomes), an automated verdict, a methodology/
+    soundness checklist (paired vs unpaired tests, multiple-comparisons
+    correction via Holm's method, selection-bias warnings), and raw data
+    export. The methodology tab's live significance testing (Wilcoxon
+    signed-rank when seeds pair 1:1, Holm-corrected across groups) is
+    genuinely useful for generating a properly-caveated significance
+    table for the paper rather than just reporting means.
+
+
+5. WHY IT WORKS (mechanistic + empirical)
+--------------------------------------------
+Mechanistic argument:
+  - The core failure mode of fixed alpha is timing: bias and accuracy
+    trends aren't constant over training, so any single alpha is a
+    compromise averaged over the whole run rather than fit to what's
+    happening right now.
+  - By reacting to the DERIVATIVE (EMA-smoothed delta) of each metric
+    rather than its absolute level, the controller responds to trends
+    while they're happening instead of only after some absolute threshold
+    is crossed — closer to a real-time feedback loop than a static
+    schedule.
+  - The accuracy floor guarantees a worst-case behavior (never sacrifice
+    accuracy below a known-safe threshold for a fairness gain), which is
+    exactly the failure mode that makes practitioners nervous about
+    adversarial debiasing in the first place.
+
+Empirical evidence (Adult Income, 30 seeds, mean +/- std):
+    Baseline:            ACC 0.8453+/-0.0014  DEO 0.0816+/-0.0223  DAO 0.0807+/-0.0138
+    Best single fixed a=0.4708: ACC 0.8444+/-0.0016  DEO 0.0201+/-0.0140  DAO 0.0401+/-0.0086
+    Dynamic (adaptive):  ACC 0.8446+/-0.0014  DEO 0.0236+/-0.0183  DAO 0.0449+/-0.0112
+  -> Dynamic is statistically indistinguishable from the single best
+     hand-picked fixed alpha on fairness, while requiring NO sweep to find
+     that value in advance. That's the actual headline claim.
+
+  Stability (epochs 10-30, cross-seed spread):
+    Baseline DEO std 0.0238 | Fixed avg DEO std 0.0423 | Dynamic DEO std 0.0180
+    Baseline DAO std 0.0140 | Fixed avg DAO std 0.0182 | Dynamic DAO std 0.0105
+  -> Dynamic is not just competitive on the mean, it's MORE consistent
+     run-to-run than either baseline or the average fixed-alpha run —
+     lower variance in outcomes across random seeds, which is a genuinely
+     separate and additional claim from "good average fairness."
+
+  Epoch-to-epoch jitter (within a single run):
+    Baseline DEO delta 0.02418 | Fixed avg 0.02290 | Dynamic 0.01872
+    Baseline DAO delta 0.01458 | Fixed avg 0.01181 | Dynamic 0.01102
+  -> Training is also smoother/less erratic epoch-to-epoch with the
+     adaptive controller than either alternative.
+
+
+6. WHAT MAKES IT GOOD / NOVEL CONTRIBUTIONS (for Contributions bullet
+   list in the Introduction)
+------------------------------------------------------------------------
+  1. A closed-loop controller for the adversarial-debiasing weight
+     (alpha) that reacts to the TREND of accuracy/DEO/DAO rather than a
+     fixed value or a pre-set schedule.
+  2. An explicit, tunable trade-off mechanism (W_DEO, W_DAO, W_ACC) that
+     lets accuracy and fairness pressure "compete" through one signed
+     scalar rather than needing hand-written control-flow rules.
+  3. A hard accuracy safety net that provides a worst-case guarantee,
+     addressing the most common practical objection to adversarial
+     debiasing (fear of uncontrolled accuracy loss).
+  4. A methodologically rigorous evaluation: 30 seeds (vs the field's
+     typical 5-10), a full 8-point fixed-alpha sweep as the comparison
+     baseline (not a single cherry-pickable point), Pareto-dominance
+     analysis rather than single-point comparison, and both mean-outcome
+     AND stability (variance) analysis using full per-epoch history.
+  5. Cross-dataset validation (Adult Income + German Credit) with an
+     honestly reported re-tuning failure and fix — demonstrates the
+     method generalizes but is not plug-and-play across datasets without
+     re-tuning ACC_FLOOR to the dataset's actual achievable accuracy.
+  6. Fully reproducible: identical shared code paths across
+     baseline/fixed/dynamic (same preprocessing, same architecture, same
+     30 seeds, same W&B project) so the ONLY difference between
+     conditions is the alpha mechanism itself — no confounding from
+     unequal compute budgets or divergent preprocessing.
+
+
+7. EXPERIMENTAL VALIDATION SUMMARY (numbers to have on hand)
+----------------------------------------------------------------
+Adult Income (45k rows, 99 features, gender sensitive attr, 30 seeds/cond):
+  See table in section 5 above. Dynamic essentially matches the best
+  fixed alpha on fairness at equal/near-equal accuracy, without needing a
+  sweep to find that best alpha first. Full 8-point sweep results are in
+  the README's main results table.
+
+German Credit (1,000 rows, much smaller/noisier, gender sensitive attr,
+30 seeds baseline/dynamic, 240 runs fixed sweep):
+    Baseline:  ACC 0.7233+/-0.0149  DEO 0.0893+/-0.0370  DAO 0.0738+/-0.0353
+    Dynamic (re-tuned, validated config):
+               ACC 0.7265+/-0.0153  DEO 0.0835+/-0.0483  DAO 0.0755+/-0.0393
+  -> Beats baseline on ACC and DEO, ties on DAO. Dominated by only 1 fixed
+     alpha (a=1.0) on DEO, 2 (a=0.1, a=1.0) on DAO — down from 5 and 4
+     respectively before the hyperparameter-search bug was fixed. No
+     stability advantage observed on German (unlike Adult) — smaller test
+     set (~200 rows) is the likely explanation, worth stating as an open
+     question rather than a settled conclusion.
+
+Re-tuning story for German (good Limitations/Discussion material):
+  Attempt 1: reused Adult's ACC_FLOOR=0.84 unchanged -> German's ceiling
+    is ~0.73-0.75, so the floor NEVER stopped triggering -> alpha
+    collapsed to ALPHA_MIN almost immediately, every epoch. Complete
+    failure, but an obvious one.
+  Attempt 2: ran a 42-trial Bayesian search (3 seeds/trial, 30 epochs) ->
+    found ACC_FLOOR=0.7366, looked plausible on paper. But validating
+    against the FULL 30 seeds showed the override still fired on 84.6% of
+    all epochs, and alpha sat at ALPHA_MIN on 70.7% of them. Root cause:
+    German's true per-epoch accuracy at convergence is 0.7256+/-0.0162,
+    and 0.7366 sits ABOVE that mean — so ordinary sampling noise, not a
+    genuine accuracy drop, was triggering the "emergency" override almost
+    constantly. A silent failure that "looked fine" until checked against
+    more data than the search itself used.
+  Attempt 3 (validated): raised SEEDS_PER_TRIAL from 3 to 8 (less
+    susceptible to a lucky/unlucky seed draw skewing the ranking), and
+    corrected the acc_floor search range to [0.50, 0.70] (below the noise
+    band, not just below the eventual ceiling). Found ACC_FLOOR=0.6802.
+    Re-validated on the full 30 seeds: override now fires on only 16.2%
+    of epochs (concentrated in early ramp-up, not throughout), alpha
+    never collapses to ALPHA_MIN.
+  Takeaway to state explicitly in the paper: "a hyperparameter search's
+  winning config is a claim, not a fact — validate it against more data
+  than the search itself used before trusting it." This is a genuinely
+  useful, generalizable methodological point independent of this specific
+  project.
+
+
+8. LIMITATIONS / HONEST CAVEATS (Discussion / Ethical Considerations)
+--------------------------------------------------------------------------
+  - Gender is treated as binary — an artifact of how the UCI Adult/German
+    datasets record it, not a design choice endorsed by the method.
+  - DEO and DAO are two specific, narrow definitions of "fairness" among
+    many possible ones (they don't cover, e.g., calibration parity,
+    individual fairness, or fairness for intersectional/non-binary
+    groups).
+  - The accuracy floor makes "accuracy is preserved" partially an
+    engineered guarantee, not a purely emergent result of the trend-aware
+    mechanism — disclose this rather than presenting it as a surprising
+    discovery.
+  - Single sensitive attribute per dataset tested (gender only) — doesn't
+    establish the method works for other sensitive attributes or multiple
+    simultaneous protected attributes.
+  - Controller hyperparameters (ALPHA_LR, W_DEO, W_DAO, W_ACC, ACC_FLOOR,
+    EMA_ALPHA) were found via their own hyperparameter search — same kind
+    of tuning effort that produced the fixed-alpha values being compared
+    against, but worth explicitly stating the tuning budget for each side
+    so a reviewer can judge whether the comparison is apples-to-apples.
+  - Two datasets is enough to show "not an Adult-only artifact" but not
+    enough to claim general applicability across domains/dataset sizes —
+    German's much smaller size (1,000 rows vs ~45k) already shows the
+    method's advantage shrinks (though doesn't vanish) as data gets
+    noisier — worth explicitly flagging dataset-size sensitivity as an
+    open question rather than claiming it away.
+  - No stability advantage observed on German — only on Adult. Don't
+    overclaim "the method is always more stable"; state it as "more
+    stable on the larger dataset tested, inconclusive on the smaller one."
+  - Held-out evaluation: metrics are computed on the test split every
+    epoch to drive the controller's own decisions. This is standard for
+    a train-time controller but is worth an explicit sentence confirming
+    the test split is never used for gradient updates, only for the
+    controller's feedback signal and final reporting — a natural reviewer
+    question.
+
+
+9. SUGGESTED PAPER STRUCTURE (mapped to what already exists in the repo)
+---------------------------------------------------------------------------
+  1. Abstract
+       - One-line pitch (section 1) + headline numbers (section 5/7).
+  2. Introduction
+       - Problem with fixed alpha in adversarial debiasing.
+       - Contributions list (section 6, as numbered bullets).
+  3. Related Work
+       - Zhang et al. (2018) adversarial debiasing (primary baseline/
+         foundation).
+       - Brief nod to other dynamic-weighting / curriculum-style
+         approaches in adversarial training generally, and other fairness
+         metrics beyond DEO/DAO (positions the "narrow fairness
+         definition" limitation honestly rather than ignoring it).
+  4. Method
+       4.1 Predictor/adversary architecture (section 4.2).
+       4.2 Fairness metrics: DEO, DAO definitions (section 4.6).
+       4.3 Adaptive Alpha Control: the MetricHistory controller, EMA
+           smoothing, pressure formula, alpha update rule, accuracy floor
+           (section 4.5 — this is the core Method section, use the exact
+           formulas listed there).
+  5. Experimental Setup
+       - Datasets (Adult Income, German Credit) + preprocessing (4.1).
+       - Conditions compared: baseline / 8-point fixed-alpha sweep /
+         dynamic, all sharing code, seeds, architecture (section 4.3-4.5
+         intro + README "Experimental setup" table).
+       - 30 seeds, paired design, statistical testing approach (mention
+         the paired Wilcoxon / Holm correction methodology from app.py's
+         methodology tab — frame it as the analysis approach even if the
+         dashboard itself isn't the paper's artifact).
+  6. Results
+       6.1 Adult Income: main results table + Pareto frontier figure
+           (adult/results/pareto_frontier.png) + per-epoch curves
+           (acc/deo/dao_over_epochs.png).
+       6.2 Stability analysis: cross-seed spread + epoch-to-epoch jitter
+           tables (section 5).
+       6.3 German Credit: results table + figures (german/results/) +
+           the re-tuning story as a subsection or a Discussion callout
+           (section 7's "re-tuning story").
+  7. Discussion
+       - Honest read of the headline result: adaptive alpha ~= best
+         single fixed alpha on fairness, without needing the sweep to
+         find it (not "beats everything").
+       - Why the accuracy floor should be disclosed as a design choice.
+       - Dataset-size sensitivity (German's weaker/inconclusive stability
+         result vs Adult's clear one).
+  8. Limitations & Ethical Considerations (section 8 above — almost
+     entirely reusable near-verbatim from README's existing "Ethical
+     considerations" section).
+  9. Conclusion
+       - Restate contribution: automatic, trend-aware alpha control
+         reaches the same fairness-accuracy operating point a manual
+         8-value sweep would have to be run to find, with better
+         stability on the larger of the two datasets tested.
+  10. Reproducibility statement
+       - All code, seeds, and W&B logs; identical preprocessing/
+         architecture across conditions; multi-machine W&B Sweep support
+         for the fixed-alpha grid (adult/sweeps/, german/sweeps/).
+
+
+10. OPEN QUESTIONS / FUTURE WORK (good for closing the paper)
+------------------------------------------------------------------
+  - Does the stability advantage reappear on German with a larger held-out
+    test set, or is it fundamentally tied to dataset/test-set size?
+  - Would a non-binary or intersectional sensitive attribute change the
+    controller's behavior (the adversary's task gets harder/different)?
+  - Could ACC_FLOOR itself be made adaptive (e.g., set relative to a
+    running estimate of the baseline's own accuracy ceiling) instead of a
+    manually re-tuned constant per dataset — this would directly address
+    the German re-tuning failure mode at its root rather than requiring a
+    fresh hyperparameter search per dataset.
+  - Sensitivity analysis: does Dynamic still win across a RANGE of its own
+    controller hyperparameters (not just the single best found config)?
+    This directly addresses limitation "controller tuned via its own
+    search" from section 8 and would meaningfully strengthen the paper's
+    robustness claims.
