@@ -2,3 +2,13 @@ __pycache__/
 *.pyc
 wandb/
 .DS_Store
+.claude/
+
+# LaTeX build files (results/*.log are experiment logs and stay tracked)
+paper/**/*.aux
+paper/**/*.log
+paper/**/*.out
+paper/**/*.toc
+paper/**/*.synctex.gz
+paper/**/*.fls
+paper/**/*.fdb_latexmk
