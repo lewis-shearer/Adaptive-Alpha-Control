@@ -8,10 +8,10 @@ import re
 import numpy as np
 import matplotlib.pyplot as plt
 
-BASELINE_LOG = "/tmp/baseline_30.log"
-FIXED_LOG = "/tmp/fixed_30.log"
-ADAPTIVE_LOG = "/tmp/adaptive_30.log"
-POSTPROC_LOG = "/tmp/postproc_30.log"
+BASELINE_LOG = "results/baseline_30.log"
+FIXED_LOG = "results/fixed_30.log"
+ADAPTIVE_LOG = "results/adaptive_30.log"
+POSTPROC_LOG = "results/postproc_30.log"
 
 SEED_LINE = re.compile(r"acc=([\d.]+) deo=([\d.]+) dao=([\d.]+)")
 FIXED_LINE = re.compile(r"alpha=([\d.]+) seed=\d+: acc=([\d.]+) deo=([\d.]+) dao=([\d.]+)")

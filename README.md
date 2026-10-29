@@ -91,6 +91,7 @@ python -m src.postprocess_equalized_odds_german
 python -m src.experiments.annealed_epsilon 5
 python -m src.experiments.gradient_reversal 5
 python -m src.significance_test             # COMPAS comparisons
+python -m src.make_pareto_plot              # redraws paper/pareto_frontier.png from results/
 ```
 
 Each runner prints one line per seed and a summary; the files in `results/` are those outputs saved to disk. The COMPAS data comes from ProPublica's analysis described in their [Machine Bias](https://www.propublica.org/article/machine-bias-risk-assessments-in-criminal-sentencing) article.
@@ -101,5 +102,5 @@ Each runner prints one line per seed and a summary; the files in `results/` are 
 - Post-processing calibrates on half of the test split and is scored on the other half, so its numbers come from 528 COMPAS rows or 100 German Credit rows rather than the full test split used for the other conditions.
 - The annealing and gradient-reversal checks used 5 seeds.
 - `src/significance_test.py` only runs the COMPAS comparisons. The German Credit table was made by changing its inputs by hand.
-- `src/make_pareto_plot.py` and `src/export_site_results.py` read logs from `/tmp`, and `paper/pareto_frontier.png` was drawn from an earlier set of COMPAS runs, so its points differ slightly from the tables above.
+- `src/export_site_results.py` still reads logs from `/tmp`.
 - Both sensitive attributes are treated as binary, and DEO and DAO cover only two of many fairness definitions.
