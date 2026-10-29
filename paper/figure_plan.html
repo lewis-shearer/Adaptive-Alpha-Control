@@ -1,0 +1,256 @@
+<title>Figure Plan</title>
+<style>
+/* layout: a horizontal paper-trail strip of every section, then three large
+   pen-and-paper focus panels for the sections that actually need a drawn
+   diagram, each with a checklist + a ruled sketch box sized for a pen */
+:root {
+  --bg: #eef1f6;
+  --panel: #ffffff;
+  --ink: #1a2436;
+  --muted: #5b6678;
+  --line: #c6cedb;
+  --accent: #2451b3;
+  --accent-soft: #e4ebfb;
+  --done: #1e8a5f;
+  --done-soft: #e3f5ec;
+  --grid-line: #d7dde8;
+  --font-display: 'IBM Plex Mono', 'SF Mono', ui-monospace, monospace;
+  --font-body: 'IBM Plex Sans', -apple-system, system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141922;
+    --panel: #1b2230;
+    --ink: #e8ecf4;
+    --muted: #9aa5b8;
+    --line: #313c50;
+    --accent: #6f9cf5;
+    --accent-soft: #1f2b47;
+    --done: #5ed6a0;
+    --done-soft: #16332a;
+    --grid-line: #2a3345;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141922;
+  --panel: #1b2230;
+  --ink: #e8ecf4;
+  --muted: #9aa5b8;
+  --line: #313c50;
+  --accent: #6f9cf5;
+  --accent-soft: #1f2b47;
+  --done: #5ed6a0;
+  --done-soft: #16332a;
+  --grid-line: #2a3345;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  margin: 0;
+  padding-block: 28px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  line-height: 1.45;
+}
+.wrap { max-width: 1400px; margin: 0 auto; }
+
+header { margin-bottom: 28px; }
+h1 {
+  font-family: var(--font-display);
+  font-size: clamp(22px, 3vw, 32px);
+  margin: 0 0 6px;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+.subtitle { color: var(--muted); font-size: 14px; max-width: 70ch; }
+.print-hint {
+  margin-top: 10px;
+  display: inline-block;
+  font-family: var(--font-display);
+  font-size: 12px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
+/* paper-trail strip */
+.trail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 36px;
+}
+.trail-item {
+  flex: 1 1 110px;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+}
+.trail-item .n { font-family: var(--font-display); color: var(--muted); font-size: 11px; }
+.trail-item .name { font-weight: 600; margin-top: 2px; }
+.trail-item.needs-figure { border-color: var(--accent); background: var(--accent-soft); }
+.trail-item.done { border-color: var(--done); background: var(--done-soft); }
+.trail-item .tag {
+  display: inline-block; margin-top: 6px; font-size: 10px;
+  font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.04em;
+}
+.trail-item.needs-figure .tag { color: var(--accent); }
+.trail-item.done .tag { color: var(--done); }
+
+/* focus panels */
+.panels { display: grid; grid-template-columns: 1fr; gap: 24px; }
+@media (min-width: 900px) {
+  .panels { grid-template-columns: 1fr 1fr; }
+  .panel.wide { grid-column: 1 / -1; }
+}
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px 22px 22px;
+  min-width: 0;
+}
+.panel h2 {
+  font-family: var(--font-display);
+  font-size: 16px;
+  margin: 0 0 4px;
+  display: flex; align-items: baseline; gap: 8px;
+}
+.panel h2 .num { color: var(--accent); }
+.panel .goes-in {
+  font-size: 12px; color: var(--muted); margin-bottom: 14px;
+  font-family: var(--font-display);
+}
+.checklist { list-style: none; margin: 0 0 16px; padding: 0; font-size: 13.5px; }
+.checklist li {
+  display: flex; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--line);
+}
+.checklist li:last-child { border-bottom: none; }
+.checklist .box {
+  flex: none; width: 14px; height: 14px; margin-top: 2px;
+  border: 1.5px solid var(--muted); border-radius: 3px;
+}
+.sketch {
+  position: relative;
+  border: 1.5px dashed var(--line);
+  border-radius: 8px;
+  min-height: 220px;
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+.sketch .label {
+  position: absolute; top: 8px; left: 10px;
+  font-family: var(--font-display); font-size: 10px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.done-banner {
+  font-family: var(--font-display); font-size: 13px; color: var(--done);
+  background: var(--done-soft); border-radius: 8px; padding: 10px 14px;
+}
+
+footer { margin-top: 28px; font-size: 11px; color: var(--muted); }
+
+@media print {
+  @page { size: A3 landscape; margin: 14mm; }
+  body { padding: 0; background: #fff; }
+  .print-hint { display: none; }
+  .panels { grid-template-columns: 1fr 1fr 1fr; }
+  .panel.wide { grid-column: 1 / -1; }
+  .sketch { min-height: 260px; }
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Adaptive Alpha Control — Figure Plan</h1>
+    <div class="subtitle">
+      One page mapping the whole paper's structure, with the three sections
+      that need a hand-drawn diagram pulled out as large sketch panels.
+      Print at A3 landscape and pen the actual diagrams directly into the
+      grid boxes before redrawing them properly (e.g. in TikZ or a drawing
+      tool) for the final PDF.
+    </div>
+    <div class="print-hint">Print: Cmd/Ctrl+P → Paper size A3 → Orientation Landscape</div>
+  </header>
+
+  <div class="trail">
+    <div class="trail-item"><div class="n">§0</div><div class="name">Abstract</div></div>
+    <div class="trail-item"><div class="n">§1</div><div class="name">Introduction</div></div>
+    <div class="trail-item"><div class="n">§2</div><div class="name">Related Work</div></div>
+    <div class="trail-item needs-figure"><div class="n">§3</div><div class="name">Method</div><div class="tag">needs 2 figures →</div></div>
+    <div class="trail-item needs-figure"><div class="n">§4</div><div class="name">Experimental Setup</div><div class="tag">needs 1 figure →</div></div>
+    <div class="trail-item done"><div class="n">§5</div><div class="name">Results</div><div class="tag">✓ Pareto plot done</div></div>
+    <div class="trail-item"><div class="n">§6</div><div class="name">Discussion</div></div>
+    <div class="trail-item"><div class="n">§7</div><div class="name">Limitations</div></div>
+    <div class="trail-item"><div class="n">§8</div><div class="name">Conclusion</div></div>
+  </div>
+
+  <div class="panels">
+
+    <div class="panel">
+      <h2><span class="num">1</span> Method architecture diagram</h2>
+      <div class="goes-in">goes in §3, after the fixed-alpha equations</div>
+      <ul class="checklist">
+        <li><span class="box"></span> Predictor box: Dense(32,relu)→Dense(16,relu)→Dense(1,sigmoid), input = feature vector, output ŷ</li>
+        <li><span class="box"></span> Arrow from ŷ splitting into TWO adversary heads</li>
+        <li><span class="box"></span> Adversary A (y=1 subset): Dense(16,relu)→Dense(8,relu)→Dense(1,sigmoid) → ẑ, labelled "DEO proxy"</li>
+        <li><span class="box"></span> Adversary B (y=0 subset): same shape → ẑ, labelled "DAO proxy (with A)"</li>
+        <li><span class="box"></span> Two dashed feedback arrows: α_DEO and α_DAO flowing back into the predictor's loss term</li>
+        <li><span class="box"></span> Small inset box showing the dual-ascent update rule (α ← max(0, α + η·pressure))</li>
+        <li><span class="box"></span> Caption note: "frozen" vs "trainable" per step (use lock icon or dashed border)</li>
+      </ul>
+      <div class="sketch"><span class="label">sketch here</span></div>
+    </div>
+
+    <div class="panel">
+      <h2><span class="num">2</span> Post-processing calibration diagram</h2>
+      <div class="goes-in">goes in §3, after the equalized-odds equations</div>
+      <ul class="checklist">
+        <li><span class="box"></span> Two axes: FPR (x) vs TPR (y), unit square</li>
+        <li><span class="box"></span> Group 0's ROC curve (step/staircase from raw thresholds)</li>
+        <li><span class="box"></span> Group 0's upper concave hull overlaid (smooth curve above the staircase)</li>
+        <li><span class="box"></span> Group 1's ROC curve + hull, different color/line style</li>
+        <li><span class="box"></span> Marked intersection region where both hulls' TPR is achievable at the same FPR</li>
+        <li><span class="box"></span> Star/dot at the chosen (FPR*, TPR*) operating point</li>
+        <li><span class="box"></span> Small side note: "mix threshold_lo / threshold_hi with probability p per example"</li>
+      </ul>
+      <div class="sketch"><span class="label">sketch here</span></div>
+    </div>
+
+    <div class="panel wide">
+      <h2><span class="num">3</span> Dataset comparison table/figure</h2>
+      <div class="goes-in">goes in §4 (Experimental Setup), replaces/supplements the prose dataset description</div>
+      <ul class="checklist">
+        <li><span class="box"></span> Columns: COMPAS | German Credit</li>
+        <li><span class="box"></span> Rows: rows after filtering, train/test split, feature count, sensitive attribute, target</li>
+        <li><span class="box"></span> Row: baseline accuracy (0.657 vs 0.721)</li>
+        <li><span class="box"></span> Row: baseline DEO (0.249 vs 0.058) — flag the ~4x gap visually (bar or shading)</li>
+        <li><span class="box"></span> Row: baseline DAO (0.207 vs 0.053)</li>
+        <li><span class="box"></span> Visual emphasis on test-set size (1,056 vs 200) — this is the number the paper's whole cross-dataset finding hinges on</li>
+      </ul>
+      <div class="sketch"><span class="label">sketch here — table layout or small bar comparison</span></div>
+    </div>
+
+    <div class="panel wide">
+      <h2><span class="num">✓</span> Results: Pareto frontier plot</h2>
+      <div class="goes-in">already in §5 — paper/pareto_frontier.png</div>
+      <div class="done-banner">Done. Accuracy vs DEO/DAO across all 6 conditions, both datasets' means ± std, generated by src/make_pareto_plot.py. No further sketching needed here.</div>
+    </div>
+
+  </div>
+
+  <footer>
+    Figure plan for paper/paper.tex — generated 2026-10-26. Sketch panels are deliberately oversized for pen annotation; redraw cleanly (TikZ, Excalidraw, or similar) once the layout is settled on paper.
+  </footer>
+</div>

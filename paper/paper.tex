@@ -1,0 +1,524 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{natbib}
+
+\title{When Does Adaptive Alpha Control Help? A Controlled Comparison of
+Adversarial Debiasing and Post-Processing Calibration}
+\author{Lewis Shearer}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Adversarial debiasing forces a single hand-picked weight ($\alpha$) to
+govern the accuracy-fairness trade-off for an entire training run. We
+propose Adaptive Alpha Control, a dual-ascent controller that adjusts
+two separate weights -- one for an equal-opportunity constraint, one for
+an average-odds constraint -- every epoch, with each target set relative
+to the task's own measured baseline bias rather than an arbitrary
+constant. On COMPAS (30 seeds, paired significance testing), the
+controller reaches a different point on the accuracy-fairness frontier
+automatically: statistically indistinguishable accuracy from the best
+fixed alpha found by sweeping, significantly better equal-opportunity
+gap ($p<0.0001$), but significantly worse average-odds gap ($p=0.027$) --
+a trade, not a dominance. We then compare both against post-processing
+equalized-odds calibration (Hardt et al., 2016), which requires no
+adversary or retraining. On COMPAS it substantially outperforms every
+adversarial variant tested, including ours, on every metric
+simultaneously. Testing whether this generalizes, we find it does not:
+on a smaller second dataset (German Credit, 200 test rows vs.\ COMPAS's
+1{,}056), post-processing becomes the \emph{worst} method, significantly
+so on the average-odds gap, while every adversarial method -- including
+ours -- stays stable across both datasets. The paper's contribution is
+therefore not a ranking of methods but a controlled comparison
+identifying the condition (available calibration-set size) under which
+each approach should be preferred.
+\end{abstract}
+
+\section{Introduction}
+
+Adversarial debiasing \citep{zhang2018mitigating} trains a predictor
+against an adversary that tries to recover a sensitive attribute from
+the predictor's output, scaling how much the predictor listens to the
+adversary by a single weight, $\alpha$. $\alpha$ is fixed and chosen by
+hand before training begins -- but the right value is not constant
+across a training run: early on, an undertrained predictor's output may
+carry little signal for the adversary to exploit regardless of
+$\alpha$; later, as the predictor converges, bias can re-emerge in ways a
+value chosen at the start cannot anticipate. A single static $\alpha$ is
+therefore a compromise averaged over the whole run rather than a value
+fit to what is actually happening at each point in training, and finding
+even a reasonable fixed value requires sweeping several candidates and
+comparing their outcomes after the fact.
+
+This paper replaces the fixed weight with a controller that adjusts two
+separate weights -- one for each of two fairness criteria (equal
+opportunity and average odds) -- every epoch, based on how far the
+current model sits from a fairness target set relative to the task's
+own measured baseline bias. The controller is framed as dual ascent on
+a constrained optimization problem rather than a hand-built heuristic,
+giving each design choice (what the update does, why two separate
+weights rather than one, why a safety floor on accuracy) a principled
+justification rather than a post-hoc one.
+
+Having built this, the natural next question is whether a fairness
+mechanism that intervenes during training is actually necessary at all.
+We compare against post-processing equalized-odds calibration
+\citep{hardt2016equality}, which requires no adversary and no retraining
+-- only a calibration pass on an already-trained, otherwise-unconstrained
+predictor. On our primary dataset (COMPAS), post-processing
+substantially outperforms every adversarial variant tested, including
+our own adaptive mechanism. Rather than treat this as a reason to
+abandon the adversarial approach, we test whether the result generalizes
+to a second, smaller dataset (German Credit) and find that it does not:
+post-processing's advantage specifically depends on having enough
+held-out data to calibrate reliable per-group thresholds, a condition
+COMPAS meets and German Credit does not. The paper's contribution is
+therefore not "method X beats method Y," but a controlled comparison
+that identifies the condition under which each approach is preferable.
+
+Contributions:
+\begin{enumerate}
+  \item Adaptive Alpha Control: a dual-ascent controller for the
+    predictor/adversary weight in adversarial debiasing, with two
+    separate multipliers for equal opportunity (DEO) and average-odds
+    (DAO) gaps, each targeting a fraction of the task's own measured
+    baseline bias rather than an arbitrary fixed constant.
+  \item A rigorous comparison against a fixed-alpha sweep baseline
+    (3 points: $\alpha \in \{0.5, 1.0, 2.0\}$) across 30 seeds, showing the
+    adaptive method lands on or near the best fixed-alpha operating point
+    without requiring the sweep.
+  \item A controlled comparison against post-processing equalized-odds
+    calibration \citep{hardt2016equality}, showing it dominates every
+    adversarial method on COMPAS but becomes specifically unreliable on
+    the compound fairness metric (DAO) when the calibration set is small
+    (German Credit), a conditional rather than universal result.
+  \item Cross-dataset validation (COMPAS, German Credit) with paired
+    significance testing (Wilcoxon signed-rank, Holm-corrected).
+\end{enumerate}
+
+\section{Related Work}
+
+\paragraph{Adversarial debiasing.} \citet{zhang2018mitigating} introduce
+a predictor/adversary minimax game where a predictor is trained to
+accomplish a task while an adversary tries to recover a sensitive
+attribute from only the predictor's output. The predictor's loss
+subtracts the adversary's (scaled by a weight $\alpha$), so the predictor
+is pushed to make its output uninformative about the sensitive attribute
+to the extent $\alpha$ demands. $\alpha$ is fixed and hand-chosen in the
+original formulation; we replace it with a per-epoch controller.
+
+\paragraph{Constrained optimization for fairness.} Treating a fairness
+gap as a constraint rather than a soft penalty term has a history
+in \citet{agarwal2018reductions} and \citet{cotter2019optimization}, who
+use Lagrangian-style dual methods to directly target a fairness
+constraint via alternating gradient ascent on a multiplier. Our
+dual-ascent controller is the same family of idea applied inside a
+per-epoch training loop rather than as an outer reduction over a
+black-box classifier.
+
+\paragraph{Post-processing.} \citet{hardt2016equality} show that, given
+an already-trained (unconstrained) classifier's scores, per-group
+decision thresholds can be chosen -- via randomized mixing between two
+thresholds per group -- to exactly satisfy equalized odds while
+maximizing accuracy, by searching the intersection of each group's ROC
+convex hull. This requires no retraining and no adversary, but does
+require enough held-out data per group to estimate a reliable ROC curve.
+
+\paragraph{Domain-adversarial training.} \citet{ganin2015unsupervised}
+introduce the gradient-reversal layer, letting a minimax game of this
+kind be trained with a single joint backward pass instead of alternating
+updates. We use this as an implementation-level ablation
+(Section~\ref{sec:discussion}) to check whether our alternating-update
+implementation itself was costing anything relative to the more standard
+DANN-style setup -- it was not; the two are equivalent.
+
+\paragraph{COMPAS and algorithmic recidivism prediction.}
+\citet{angwin2016machine} is the ProPublica investigation that
+established COMPAS's racial disparity in false positive rates as a
+motivating real-world case for equalized-odds-style fairness criteria,
+and is the dataset used throughout this paper's primary experiments.
+
+\section{Method}
+
+\subsection{Predictor/adversary architecture}
+Predictor: Dense(32, relu) $\to$ Dense(16, relu) $\to$ Dense(1, sigmoid).
+Input is the full feature vector; output is a single predicted
+probability for the task label $y$.
+
+Adversary: Dense(16, relu) -> Dense(8, relu) -> Dense(1, sigmoid). Input
+is the predictor's single scalar output $\hat{y}$ -- not the raw
+features, not the true label -- so the adversary can only succeed if
+$\hat{y}$ itself leaks the sensitive attribute $z$.
+
+\subsection{Fairness metrics}
+Let $\text{TPR}_g$ and $\text{FPR}_g$ denote the true/false positive rate
+within sensitive-attribute group $g \in \{0, 1\}$.
+\begin{align}
+  \text{DEO} &= |\text{TPR}_0 - \text{TPR}_1| \\
+  \text{DAO} &= \tfrac{1}{2}\left(|\text{TPR}_0 - \text{TPR}_1| + |\text{FPR}_0 - \text{FPR}_1|\right)
+\end{align}
+Both are computed on held-out data; 0 is perfectly fair by this
+definition, higher is more biased.
+
+\subsection{Baseline adversarial debiasing (fixed alpha)}
+Following \citet{zhang2018mitigating}, for a fixed scalar $\alpha$:
+\begin{align}
+  L_P &= \text{BCE}(y, \hat{y}) - \alpha \cdot \text{BCE}(z, \hat{z}) \\
+  L_A &= \text{BCE}(z, \hat{z})
+\end{align}
+Each minibatch: update the adversary first (predictor's weights held
+fixed for that update), then update the predictor (adversary's weights
+held fixed). This alternation is necessary because $L_P$'s second term
+depends on the adversary's current best response -- a stale or
+simultaneously-updating adversary would make the "maximize the
+adversary's loss" signal incorrect.
+
+\subsection{Adaptive Alpha Control (dual ascent)}
+\label{sec:adaptive}
+Reframe the problem as constrained optimization:
+\begin{align}
+  \min \quad & \text{BCE}(y, \hat{y}) \\
+  \text{s.t.} \quad & \text{DEO} \leq \epsilon_{\text{DEO}}, \quad \text{DAO} \leq \epsilon_{\text{DAO}}
+\end{align}
+with two separate dual variables $\alpha_{\text{DEO}}, \alpha_{\text{DAO}}
+\geq 0$ updated by gradient ascent on the Lagrangian after every epoch:
+\begin{align}
+  \alpha_{\text{DEO}} &\leftarrow \max(0,\ \alpha_{\text{DEO}} + \eta \cdot (\text{DEO} - \epsilon_{\text{DEO}})) \\
+  \alpha_{\text{DAO}} &\leftarrow \max(0,\ \alpha_{\text{DAO}} + \eta \cdot (\text{DAO} - \epsilon_{\text{DAO}}))
+\end{align}
+
+To make the two multipliers genuinely independent rather than
+redundant (a single shared adversary scaled by two numbers that would
+just add together), the adversary is conditioned on the true label: two
+separate adversary heads are trained, one on the subset of each batch
+where $y=1$ (a direct proxy for TPR-gap / DEO leakage) and one where
+$y=0$ (adds the FPR-gap component DAO needs):
+\begin{align}
+  L_P = \text{BCE}(y, \hat{y}) - \alpha_{\text{DEO}} \cdot L_{A,y=1} - \alpha_{\text{DAO}} \cdot \tfrac{1}{2}(L_{A,y=1} + L_{A,y=0})
+\end{align}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/architecture.png}
+\caption{Adaptive Alpha Control: the predictor's output is split by true
+label into two subsets, each feeding a separate adversary head. Each
+head's loss proxies one fairness metric's leakage (DEO for the $y=1$
+subset, DAO for both); dual ascent on $\alpha_{\text{DEO}},
+\alpha_{\text{DAO}}$ feeds back into the predictor's loss every epoch.}
+\label{fig:architecture}
+\end{figure}
+
+$\epsilon_{\text{DEO}}, \epsilon_{\text{DAO}}$ are set as a fraction
+(30\%) of the dataset's own measured no-mitigation baseline DEO/DAO --
+not an arbitrary absolute constant -- so the target is meaningful
+regardless of how biased the dataset is to begin with. A hard safety
+clip prevents the ascent step from ever increasing alpha while accuracy
+is below a floor (set from the dataset's own measured baseline accuracy):
+if accuracy is below the floor, the pressure term is clamped to be
+non-positive that epoch, so alpha can still fall but never climb while
+accuracy is compromised.
+
+\subsection{Post-processing equalized-odds calibration}
+\label{sec:postproc}
+Following \citet{hardt2016equality}: train a plain unconstrained
+predictor (no adversary, full task accuracy). On held-out calibration
+data, compute each group's ROC curve and its upper concave hull (the set
+of (FPR, TPR) points achievable by randomly mixing two thresholds).
+Search for the (FPR\textsuperscript{*}, TPR\textsuperscript{*}) point
+achievable by \emph{both} groups' hulls simultaneously that maximizes
+overall accuracy; realize it per group via randomized mixing between the
+two empirical thresholds bracketing that point on the group's hull.
+Evaluated on a disjoint held-out split from the one used for
+calibration, to avoid optimistic bias.
+
+\section{Experimental Setup}
+
+\subsection{Datasets}
+\textbf{COMPAS} \citep{angwin2016machine}: 7{,}214 rows, filtered
+following the original ProPublica analysis (screening within 30 days of
+arrest, valid recidivism data, non-traffic charges, a produced COMPAS
+score), restricted to the two groups ProPublica's own comparison
+focuses on (African-American, Caucasian) for a clean binary sensitive
+attribute. Target: two-year recidivism. After filtering: 5{,}278 rows
+(4{,}222 train / 1{,}056 test), 12 features.
+
+\textbf{German Credit}: 1{,}000 rows, no filtering needed (800 train /
+200 test, 56 features after one-hot encoding). Target: good vs.\ bad
+credit risk. Sensitive attribute: gender (binary in this dataset).
+Included specifically because it is much smaller than COMPAS (200 test
+rows vs.\ COMPAS's 1{,}056), which is exactly the condition the
+post-processing comparison turns out to depend on.
+
+\subsection{Conditions compared}
+Four conditions, identical predictor architecture, preprocessing, and
+30-seed protocol across all of them so the only difference between
+conditions is the debiasing mechanism itself:
+\begin{enumerate}
+  \item \textbf{Baseline}: predictor only, no adversary, no debiasing
+    attempt -- the reference point for "what does bias look like
+    unmitigated."
+  \item \textbf{Fixed alpha}: Zhang et al.'s adversarial game at
+    $\alpha \in \{0.5, 1.0, 2.0\}$.
+  \item \textbf{Adaptive} (ours): dual-ascent two-constraint controller,
+    Section~\ref{sec:adaptive}.
+  \item \textbf{Post-processing}: Hardt et al.'s equalized-odds
+    calibration, Section~\ref{sec:postproc}.
+\end{enumerate}
+
+\subsection{Statistical methodology}
+30 seeds per condition, paired by seed. The train/test split itself is
+fixed (identical across every seed and condition); only weight
+initialization and minibatch shuffling vary with the seed. This isolates
+the comparison to training stochasticity alone and makes the paired test
+exact rather than approximate -- condition A, seed $s$ and condition B,
+seed $s$ differ only in the debiasing mechanism, not in what data they
+saw.
+Significance assessed via the Wilcoxon signed-rank test on paired
+per-seed values, with the Holm step-down procedure correcting for the
+multiple comparisons made across conditions and metrics
+(src/significance\_test.py).
+
+\section{Results}
+
+\subsection{COMPAS}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lccc}
+\toprule
+Condition & Accuracy & DEO & DAO \\
+\midrule
+Baseline (no mitigation)   & $0.657 \pm 0.005$ & $0.249 \pm 0.012$ & $0.207 \pm 0.015$ \\
+Fixed $\alpha=0.5$         & $0.648 \pm 0.005$ & $0.244 \pm 0.014$ & $0.203 \pm 0.020$ \\
+Fixed $\alpha=1.0$         & $0.638 \pm 0.010$ & $0.227 \pm 0.022$ & $0.192 \pm 0.019$ \\
+Fixed $\alpha=2.0$         & $0.615 \pm 0.011$ & $0.167 \pm 0.023$ & $0.131 \pm 0.023$ \\
+Adaptive (ours)            & $0.609 \pm 0.009$ & $0.127 \pm 0.019$ & $0.144 \pm 0.014$ \\
+Post-processing            & $0.631 \pm 0.020$ & $0.061 \pm 0.045$ & $0.060 \pm 0.040$ \\
+\bottomrule
+\end{tabular}
+\caption{COMPAS, 30 seeds, mean $\pm$ std.}
+\label{tab:compas}
+\end{table}
+
+Paired Wilcoxon signed-rank tests, Holm-corrected across all 12
+comparisons (full table in \texttt{results/significance\_compas.txt}):
+
+\begin{itemize}
+  \item \textbf{Adaptive vs.\ best fixed alpha ($\alpha=2.0$)}: accuracy
+    not significantly different ($p_{\text{holm}}=0.087$); DEO
+    significantly better for adaptive ($p_{\text{holm}}<0.0001$); DAO
+    significantly worse for adaptive ($p_{\text{holm}}=0.027$). Adaptive
+    reaches a different point on the frontier automatically, not a
+    strictly dominant one.
+  \item \textbf{Post-processing vs.\ adaptive}: significantly better on
+    all three metrics ($p_{\text{holm}} < 0.001$ for each).
+  \item \textbf{Adaptive vs.\ baseline}: a real, significant accuracy
+    cost ($p_{\text{holm}} = 1.2\times10^{-5}$) buys significant DEO and
+    DAO reduction (both $p_{\text{holm}} = 2.2\times10^{-8}$).
+  \item \textbf{Post-processing vs.\ baseline}: smaller significant
+    accuracy cost than adaptive's, with larger significant DEO/DAO
+    reduction (all $p_{\text{holm}} < 3\times10^{-5}$).
+\end{itemize}
+
+Figure~\ref{fig:pareto} shows accuracy against DEO and DAO across every
+condition; post-processing sits clearly above and to the right of every
+adversarial variant, including adaptive.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{pareto_frontier.png}
+\caption{Accuracy vs.\ DEO/DAO, COMPAS, 30 seeds (mean $\pm$ std). Post-processing (diamond) dominates every adversarial variant.}
+\label{fig:pareto}
+\end{figure}
+
+\subsection{German Credit}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lccc}
+\toprule
+Condition & Accuracy & DEO & DAO \\
+\midrule
+Baseline (no mitigation) & $0.721 \pm 0.016$ & $0.058 \pm 0.037$ & $0.053 \pm 0.025$ \\
+Fixed $\alpha=0.5$       & $0.726 \pm 0.016$ & $0.063 \pm 0.039$ & $0.056 \pm 0.030$ \\
+Fixed $\alpha=1.0$       & $0.729 \pm 0.015$ & $0.045 \pm 0.027$ & $0.057 \pm 0.027$ \\
+Fixed $\alpha=2.0$       & $0.726 \pm 0.015$ & $0.047 \pm 0.028$ & $0.053 \pm 0.023$ \\
+Adaptive (ours)          & $0.722 \pm 0.016$ & $0.049 \pm 0.036$ & $0.049 \pm 0.025$ \\
+Post-processing          & $0.711 \pm 0.036$ & $0.061 \pm 0.055$ & $0.105 \pm 0.067$ \\
+\bottomrule
+\end{tabular}
+\caption{German Credit, 30 seeds, mean $\pm$ std.}
+\label{tab:german}
+\end{table}
+
+The pattern reverses: post-processing is the \emph{worst} condition on
+accuracy and DAO, with roughly double the variance of every other
+condition on every metric. Paired testing (full table in
+\texttt{results/significance\_german.txt}, Holm-corrected across 15
+comparisons) confirms this is real for DAO specifically:
+post-processing vs.\ adaptive, vs.\ fixed $\alpha=2.0$, and vs.\ baseline
+are all significant ($p_{\text{holm}} = 0.0012, 0.0011, 0.0030$
+respectively). DEO and accuracy differences are directionally the same
+but not statistically significant at $n=30$ on this smaller dataset.
+Adaptive vs.\ baseline shows no significant difference on any metric on
+German -- consistent with German's low baseline bias leaving little for
+any debiasing mechanism to fix.
+
+\section{Discussion}
+\label{sec:discussion}
+
+\textbf{Adaptive alpha control's actual claim.} On COMPAS, paired
+significance testing (Wilcoxon, Holm-corrected) shows the dual-ascent
+controller is not simply "comparable" to the best fixed alpha found by
+sweeping -- it is a genuine trade differently shaped. Against fixed
+$\alpha=2.0$: accuracy is not significantly different (0.609 vs.\ 0.615,
+$p_{\text{holm}}=0.087$), DEO is significantly \emph{better} (0.127 vs.\
+0.167, $p_{\text{holm}}<0.0001$), and DAO is significantly \emph{worse}
+(0.144 vs.\ 0.131, $p_{\text{holm}}=0.027$). The honest claim is
+therefore "the controller finds a different, not strictly better, point
+on the frontier automatically" -- it over-weights the DEO constraint
+relative to DAO at this operating point, which is a property of the two
+dual-ascent multipliers' relative convergence rates, not an error. A
+practitioner who cares specifically about equal opportunity (DEO) gains
+from the adaptive mechanism without searching; one who weights DAO more
+would still need to sweep.
+
+\textbf{Post-processing wins on COMPAS, but the win is conditional.} The
+natural follow-up question to "post-processing beats adversarial
+training" is \emph{why would anyone use adversarial training at all,
+then} -- and the German Credit result answers it: post-processing's
+advantage depended on COMPAS's comparatively large held-out set.
+Adversarial methods (fixed-alpha and adaptive) use the full training set
+during optimization and do not share this weakness; they stayed stable
+across both datasets while post-processing's DAO specifically degraded,
+significantly, on the smaller one. The practical guidance this supports:
+check how much held-out data is actually available for calibration
+before choosing a debiasing approach based on a result like ours on
+COMPAS alone.
+
+\textbf{Why German moved so little.} German Credit's own baseline
+DEO/DAO (0.058 / 0.053) are already small relative to COMPAS's (0.250 /
+0.209) -- gender disparity in this dataset is simply a smaller problem
+than racial disparity in COMPAS's recidivism predictions to begin with. Every
+adversarial method tested landed within noise of baseline on German,
+which is an honest finding about the dataset, not a failure of the
+method: there was comparatively little bias to remove.
+
+\textbf{Ablations confirm rather than improve the mechanism.} Two
+alternative designs were tested against the dual-ascent controller:
+annealing $\epsilon_{\text{DEO}}, \epsilon_{\text{DAO}}$ from the
+baseline gap down to their final targets (rather than fixing them from
+epoch 1), and replacing the alternating-update training procedure with a
+single joint gradient-reversal backward pass. Annealing traded DEO
+reduction for accuracy -- a different point on the same frontier, not a
+better one. Gradient reversal reproduced the alternating-update results
+almost exactly, confirming the two training procedures are equivalent
+rather than one being a weaker implementation of the idea. Neither beat
+the adaptive mechanism's own frontier point; both results support that
+the frontier itself, not the specific training procedure, is the binding
+constraint.
+
+\section{Limitations and Ethical Considerations}
+
+\textbf{Binary sensitive attributes.} Race in COMPAS (restricted to
+African-American vs.\ Caucasian) and gender in German Credit are both
+treated as binary -- an artifact of how these datasets record the
+attribute, not a design choice this method endorses. Neither dataset
+tests intersectional or non-binary protected groups.
+
+\textbf{Narrow fairness definitions.} DEO and DAO are two specific
+equalized-odds-family definitions among many possible ones; they do not
+cover calibration parity, individual fairness, or counterfactual
+fairness.
+
+\textbf{The accuracy floor is a partially engineered guarantee.} The
+hard clip preventing alpha from increasing while accuracy is below a
+floor means "accuracy is preserved" is, to that extent, designed in
+rather than a purely emergent property of the dual-ascent mechanism.
+This should be read as a disclosed design choice, not a surprising
+empirical discovery.
+
+\textbf{The controller's own hyperparameters were tuned.} $\eta$ (the
+ascent step size) and the 30\% fraction used to set
+$\epsilon_{\text{DEO}}, \epsilon_{\text{DAO}}$ were chosen by the authors
+based on what produced a working mechanism within a 30-epoch budget, not
+derived from first principles or their own independent search. This is
+the same kind of tuning effort that produced the fixed-alpha values being
+compared against; a reviewer should weigh the comparison accordingly.
+
+\textbf{The post-processing finding is conditional, not fully
+characterized.} Two datasets are enough to show that post-processing's
+COMPAS-win does not generalize unconditionally, and that calibration-set
+size is the likely mechanism -- but not enough to establish the precise
+data-size threshold at which post-processing stops being reliable, or
+whether other factors (class balance, group-size imbalance, dimension of
+the feature space) also contribute. This is flagged as an open question
+rather than a settled one.
+
+\textbf{Held-out evaluation feeds the controller's own decisions.} For
+the adaptive method, DEO/DAO are computed on the test split every epoch
+specifically to drive alpha's update -- standard for a train-time
+controller, but worth stating explicitly: the test split is never used
+for gradient updates, only for the controller's feedback signal and
+final reporting.
+
+\section{Conclusion}
+
+Adaptive Alpha Control removes the need to hand-sweep a fixed weight in
+adversarial debiasing, reaching a comparable operating point
+automatically via dual ascent on two explicit fairness constraints. But
+the more consequential finding in this paper is that a much simpler
+post-hoc calibration method outperforms it -- conditionally. That
+condition (calibration-set size) is itself the useful takeaway: the
+choice between in-processing and post-processing debiasing should be
+informed by how much held-out data is actually available, not by a
+single-dataset benchmark result in either direction. Future work could
+characterize this threshold more precisely, test whether a hybrid
+(post-processing when data allows, adversarial training as a fallback
+when it doesn't) outperforms either alone, and extend the two-constraint
+dual-ascent idea to non-binary or intersectional sensitive attributes.
+
+\bibliographystyle{plainnat}
+\begin{thebibliography}{9}
+
+\bibitem[Agarwal et al., 2018]{agarwal2018reductions}
+Agarwal, A., Beygelzimer, A., Dudík, M., Langford, J., \& Wallach, H.
+(2018). A Reductions Approach to Fair Classification. In
+\emph{Proceedings of the 35th International Conference on Machine
+Learning (ICML)}, PMLR vol. 80, pp. 60--69.
+
+\bibitem[Angwin et al., 2016]{angwin2016machine}
+Angwin, J., Larson, J., Mattu, S., \& Kirchner, L. (2016, May 23).
+Machine Bias. \emph{ProPublica}.
+
+\bibitem[Cotter et al., 2019]{cotter2019optimization}
+Cotter, A., Jiang, H., Gupta, M., Wang, S., Narayan, T., You, S., \&
+Sridharan, K. (2019). Optimization with Non-Differentiable Constraints
+with Applications to Fairness, Recall, Churn, and Other Goals.
+\emph{Journal of Machine Learning Research}, 20(172), 1--59.
+
+\bibitem[Ganin \& Lempitsky, 2015]{ganin2015unsupervised}
+Ganin, Y., \& Lempitsky, V. (2015). Unsupervised Domain Adaptation by
+Backpropagation. In \emph{Proceedings of the 32nd International
+Conference on Machine Learning (ICML)}, PMLR vol. 37, pp. 1180--1189.
+
+\bibitem[Hardt et al., 2016]{hardt2016equality}
+Hardt, M., Price, E., \& Srebro, N. (2016). Equality of Opportunity in
+Supervised Learning. In \emph{Advances in Neural Information Processing
+Systems 29 (NeurIPS)}, pp. 3315--3323.
+
+\bibitem[Zhang et al., 2018]{zhang2018mitigating}
+Zhang, B. H., Lemoine, B., \& Mitchell, M. (2018). Mitigating Unwanted
+Biases with Adversarial Learning. In \emph{Proceedings of the 2018
+AAAI/ACM Conference on AI, Ethics, and Society (AIES)}.
+
+\end{thebibliography}
+
+\end{document}

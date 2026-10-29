@@ -1,0 +1,13 @@
+comparison                                    metric   n   mean_a   mean_b          p     p_holm
+Adaptive vs Fixed a=2.0                       acc    30   0.6085   0.6145    0.08739    0.08739  
+Post-processing vs Adaptive                   acc    30   0.6314   0.6085  5.535e-05   0.000166 *
+Post-processing vs Baseline                   acc    30   0.6314   0.6565  5.231e-06  2.615e-05 *
+Adaptive vs Baseline                          acc    30   0.6085   0.6565  1.726e-06  1.208e-05 *
+Adaptive vs Fixed a=2.0                       deo    30   0.1270   0.1666   1.18e-05  4.722e-05 *
+Post-processing vs Adaptive                   deo    30   0.0605   0.1270  1.192e-06  9.537e-06 *
+Post-processing vs Baseline                   deo    30   0.0605   0.2494  1.863e-09  2.235e-08 *
+Adaptive vs Baseline                          deo    30   0.1270   0.2494  1.863e-09  2.235e-08 *
+Adaptive vs Fixed a=2.0                       dao    30   0.1438   0.1311    0.01366    0.02733 *
+Post-processing vs Adaptive                   dao    30   0.0600   0.1438  2.608e-08  2.347e-07 *
+Post-processing vs Baseline                   dao    30   0.0600   0.2070  1.863e-09  2.235e-08 *
+Adaptive vs Baseline                          dao    30   0.1438   0.2070  1.733e-06  1.208e-05 *
